@@ -10,17 +10,61 @@
 <body>
   <main id="wallpaper" aria-label="A live watercolor view of the Solar System">
     <canvas id="scene"></canvas>
+    <div id="zen-indicator" aria-live="polite"></div>
     <div id="loading" role="status">
       <span class="loading-orbit"></span>
       <span>Painting the planets…</span>
     </div>
     <div id="status" aria-live="polite"></div>
     <pre id="camera" hidden aria-label="Camera parameters"></pre>
+    <aside id="positions" aria-label="Planet positions">
+      <div class="panel-heading">
+        <strong>Planet positions</strong>
+        <span>longitude · distance</span>
+      </div>
+      <div id="position-list"></div>
+    </aside>
+    <section id="time-controls" aria-label="Simulation time controls">
+      <div class="time-readout">
+        <time id="sim-date"></time>
+        <span id="day-counter">Day +0</span>
+      </div>
+      <div class="transport" aria-label="Direction and playback">
+        <button id="reverse-time" type="button" aria-label="Run backward" title="Run backward">◀</button>
+        <button id="pause-time" type="button" aria-label="Pause time" title="Pause or resume">Ⅱ</button>
+        <button id="forward-time" type="button" aria-label="Run forward" title="Run forward">▶</button>
+      </div>
+      <div id="speed-controls" class="speed-controls" aria-label="Simulation speed">
+        <button type="button" data-speed="0">Real</button>
+        <button type="button" data-speed="1">1 hr/s</button>
+        <button type="button" data-speed="2">1 day/s</button>
+        <button type="button" data-speed="3">30 day/s</button>
+        <button type="button" data-speed="4">1 yr/s</button>
+      </div>
+      <button id="today" class="today" type="button">Today</button>
+      <button id="earth-focus" type="button" aria-pressed="false">Earth focus</button>
+      <label id="earth-lighting-control" class="earth-lighting-control">
+        <span>Light</span>
+        <select id="earth-lighting-mode" aria-label="Earth lighting mode">
+          <option value="accurate">Accurate</option>
+          <option value="demo">Eclipse demo</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <div class="zen-picker">
+        <select id="zen-mode" aria-label="Idle desktop mode">
+          <option value="astronomical">Astronomical Zen</option>
+          <option value="ambient">Ambient Zen</option>
+          <option value="dream">Dream Zen</option>
+        </select>
+        <button id="zen-toggle" type="button">Zen</button>
+      </div>
+    </section>
     <aside id="help" hidden>
       <strong>Live watercolor Solar System</strong>
-      <span>Planet centers use current heliocentric ephemerides.</span>
+      <span>Planet centers use heliocentric ephemerides for the displayed calendar date.</span>
       <span>Drag to orbit · shift-drag to roll · ⌘-drag to move the Sun · scroll to zoom · alt-scroll for perspective</span>
-      <span><kbd>V</kbd> preset · <kbd>K</kbd> readout · <kbd>C</kbd> copy preset · <kbd>R</kbd> reset · <kbd>L</kbd> labels · <kbd>O</kbd> orbits · <kbd>Space</kbd> pause · <kbd>H</kbd> help</span>
+      <span><kbd>E</kbd> Earth focus · <kbd>S</kbd> Earth lighting · <kbd>Z</kbd> Zen · <kbd>Esc</kbd> exit Zen · <kbd>[</kbd>/<kbd>]</kbd> speed · <kbd>T</kbd> today · <kbd>P</kbd> positions · <kbd>Space</kbd> pause · <kbd>V</kbd> preset · <kbd>K</kbd> camera · <kbd>L</kbd> labels · <kbd>O</kbd> orbits · <kbd>H</kbd> help</span>
     </aside>
   </main>
   <script src="vendor/astronomy.browser.min.js"></script>

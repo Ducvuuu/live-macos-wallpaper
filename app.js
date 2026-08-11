@@ -1,15 +1,55 @@
 (() => {
   "use strict";
 
+  const wallpaper = document.querySelector("#wallpaper");
   const canvas = document.querySelector("#scene");
   const ctx = canvas.getContext("2d", { alpha: true });
   const loading = document.querySelector("#loading");
   const status = document.querySelector("#status");
   const help = document.querySelector("#help");
   const camera = document.querySelector("#camera");
+  const positions = document.querySelector("#positions");
+  const positionList = document.querySelector("#position-list");
+  const simDate = document.querySelector("#sim-date");
+  const dayCounter = document.querySelector("#day-counter");
+  const reverseTime = document.querySelector("#reverse-time");
+  const pauseTime = document.querySelector("#pause-time");
+  const forwardTime = document.querySelector("#forward-time");
+  const speedControls = [...document.querySelectorAll("[data-speed]")];
+  const today = document.querySelector("#today");
+  const earthFocus = document.querySelector("#earth-focus");
+  const earthLightingMode = document.querySelector("#earth-lighting-mode");
+  const zenModeSelect = document.querySelector("#zen-mode");
+  const zenToggle = document.querySelector("#zen-toggle");
+  const zenIndicator = document.querySelector("#zen-indicator");
 
   const DEG = Math.PI / 180;
   const DAY = 86400000;
+  const AU_KM = 149597870.7;
+  const SUN_RADIUS_AU = 696340 / AU_KM;
+  const EARTH_RADIUS_AU = 6378.137 / AU_KM;
+  const MOON_RADIUS_AU = 1737.4 / AU_KM;
+  const SPEEDS = [
+    { label: "Real time", rate: 1, refresh: 60000 },
+    { label: "1 hour/second", rate: 3600, refresh: 250 },
+    { label: "1 day/second", rate: DAY / 1000, refresh: 100 },
+    { label: "30 days/second", rate: 30 * DAY / 1000, refresh: 1000 / 30 },
+    { label: "1 year/second", rate: 365.256 * DAY / 1000, refresh: 1000 / 30 }
+  ];
+  const ZEN_MODES = ["astronomical", "ambient", "dream"];
+  const ZEN_LABELS = {
+    astronomical: "Astronomical Zen",
+    ambient: "Ambient Zen",
+    dream: "Dream Zen"
+  };
+  const DREAM_PERIODS = {
+    Mercury: 82, Venus: 112, Earth: 148, Mars: 192,
+    Jupiter: 252, Saturn: 324, Uranus: 408, Neptune: 492
+  };
+  const ZEN_SPIN_PERIODS = {
+    Mercury: 96, Venus: 132, Earth: 68, Mars: 74,
+    Jupiter: 54, Saturn: 60, Uranus: 88, Neptune: 78, Moon: 104
+  };
   // Framing presets. The projection is orthographic, so these are pure
   // composition: how far to tilt above the ecliptic, which bearing to look
   // from, where the Sun sits in frame, how far to zoom, how big to draw bodies.
@@ -26,7 +66,7 @@
   //               Neptune's compressed ring is 1. Smaller means stronger
   //               perspective: near arcs spread wide, far arcs bunch up.
   const VIEWS = [
-    { name: "Illustration", elevation: 8.6, azimuth: 13.9, roll: 21.1, sunX: 0.604, sunY: 0.502, zoom: 1.742, bodies: 0.86, distance: 2.3 },
+    { name: "Illustration", elevation: 29.1, azimuth: 46.4, roll: 339.9, sunX: 0.60, sunY: 0.50, zoom: 0.96, bodies: 0.86, distance: 2.3 },
     { name: "Wide",     elevation: 27, azimuth: 300, sunX: 0.53, sunY: 0.47, zoom: 1.00, bodies: 0.62 },
     { name: "Close",    elevation: 16, azimuth: 300, sunX: 0.78, sunY: 0.54, zoom: 2.35, bodies: 1.15 },
     { name: "Tabletop", elevation: 62, azimuth: 300, sunX: 0.50, sunY: 0.50, zoom: 1.00, bodies: 0.55 }
@@ -34,15 +74,18 @@
   const textureRoot = "assets/textures/";
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // Orbital display sizes remain illustrative. Spin-axis direction and
+  // rotational phase are supplied separately by Astronomy Engine for the
+  // current simulation date.
   const planets = [
-    { name: "Mercury", radius: 10, period: 87.969, spin: 230, color: "#d8c5ad" },
-    { name: "Venus",   radius: 17, period: 224.701, spin: -290, color: "#e4af72" },
-    { name: "Earth",   radius: 22, period: 365.256, spin: 160, color: "#8eb2be" },
-    { name: "Mars",    radius: 15, period: 686.980, spin: 190, color: "#c97958" },
-    { name: "Jupiter", radius: 42, period: 4332.59, spin: 250, color: "#cda17f" },
-    { name: "Saturn",  radius: 34, period: 10759.2, spin: 280, color: "#d7bc8e", rings: true },
-    { name: "Uranus",  radius: 25, period: 30688.5, spin: -320, color: "#9bc5c3" },
-    { name: "Neptune", radius: 25, period: 60182, spin: 300, color: "#718cae" }
+    { name: "Mercury", radius: 10, period: 87.969, color: "#d8c5ad" },
+    { name: "Venus",   radius: 17, period: 224.701, color: "#e4af72" },
+    { name: "Earth",   radius: 22, period: 365.256, color: "#8eb2be" },
+    { name: "Mars",    radius: 15, period: 686.980, color: "#c97958" },
+    { name: "Jupiter", radius: 42, period: 4332.59, color: "#cda17f" },
+    { name: "Saturn",  radius: 34, period: 10759.2, color: "#d7bc8e", rings: true },
+    { name: "Uranus",  radius: 25, period: 30688.5, color: "#9bc5c3" },
+    { name: "Neptune", radius: 25, period: 60182, color: "#718cae" }
   ];
 
   const state = {
@@ -50,8 +93,13 @@
     height: 0,
     dpr: 1,
     images: new Map(),
+    sphereBuffers: new WeakMap(),
+    lightingBuffers: new Map(),
     vectors: new Map(),
+    axes: new Map(),
     orbitVectors: new Map(),
+    moonOrbitVectors: [],
+    orbitOccluders: [],
     cameraAxis: { x: 1, y: 0 },
     basis: null,
     viewIndex: 0,
@@ -62,16 +110,151 @@
     pausedAt: 0,
     frozenElapsed: 0,
     lastEphemeris: 0,
-    lastFrame: 0
+    lastFrame: 0,
+    lastClockUi: 0,
+    timeOrigin: Date.now(),
+    timeAnchor: Date.now(),
+    timeRealAnchor: performance.now(),
+    timeDirection: 1,
+    speedIndex: 0,
+    positionRows: new Map(),
+    zenMode: null,
+    zenSelection: "astronomical",
+    zenStart: 0,
+    zenBaseView: null,
+    zenView: null,
+    zenSpinStart: new Map(),
+    dreamOffsets: new Map(),
+    lastInteraction: performance.now(),
+    earthFocus: false,
+    earthLightingMode: "accurate",
+    eclipseDemoStart: performance.now()
   };
+
+  const calendarFormatter = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+  const statusFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
   const wrap = degrees => ((degrees % 360) + 360) % 360;
 
+  function simulationRate() {
+    if (state.zenMode === "astronomical") return 6 * 3600;
+    if (state.zenMode === "ambient" || state.zenMode === "dream") return 1;
+    return SPEEDS[state.speedIndex].rate;
+  }
+
+  function simulatedTime(now = performance.now()) {
+    if (state.paused) return state.timeAnchor;
+    const elapsed = now - state.timeRealAnchor;
+    return state.timeAnchor + elapsed * state.timeDirection * simulationRate();
+  }
+
+  function rebaseSimulation(now = performance.now()) {
+    state.timeAnchor = simulatedTime(now);
+    state.timeRealAnchor = now;
+  }
+
+  function updateTransportUi() {
+    reverseTime.setAttribute("aria-pressed", String(!state.paused && state.timeDirection < 0));
+    forwardTime.setAttribute("aria-pressed", String(!state.paused && state.timeDirection > 0));
+    pauseTime.setAttribute("aria-pressed", String(state.paused));
+    pauseTime.textContent = state.paused ? "▶" : "Ⅱ";
+    pauseTime.setAttribute("aria-label", state.paused ? "Resume time" : "Pause time");
+    for (const button of speedControls) {
+      button.classList.toggle("active", Number(button.dataset.speed) === state.speedIndex);
+      button.setAttribute("aria-pressed", String(Number(button.dataset.speed) === state.speedIndex));
+    }
+  }
+
+  function updateTimeReadout(dateMs, now = performance.now(), force = false) {
+    const interval = state.speedIndex === 0 ? 500 : 80;
+    if (!force && now - state.lastClockUi < interval) return;
+    state.lastClockUi = now;
+    simDate.dateTime = new Date(dateMs).toISOString();
+    simDate.textContent = calendarFormatter.format(new Date(dateMs));
+    const days = Math.round((dateMs - state.timeOrigin) / DAY);
+    dayCounter.textContent = `Day ${days < 0 ? "−" : "+"}${Math.abs(days).toLocaleString()}`;
+  }
+
+  function setSimulationSpeed(index) {
+    const now = performance.now();
+    rebaseSimulation(now);
+    state.speedIndex = clamp(index, 0, SPEEDS.length - 1);
+    state.lastEphemeris = 0;
+    updateTransportUi();
+    updateTimeReadout(state.timeAnchor, now, true);
+    describeView();
+  }
+
+  function setTimeDirection(direction) {
+    const now = performance.now();
+    rebaseSimulation(now);
+    state.timeDirection = direction < 0 ? -1 : 1;
+    if (state.paused) {
+      state.startTime = now;
+      state.paused = false;
+    }
+    state.timeRealAnchor = now;
+    state.lastEphemeris = 0;
+    updateTransportUi();
+    describeView();
+  }
+
+  function returnToToday() {
+    const now = performance.now();
+    state.timeAnchor = Date.now();
+    state.timeRealAnchor = now;
+    state.timeDirection = 1;
+    state.speedIndex = 0;
+    if (state.paused) state.startTime = now;
+    state.paused = false;
+    state.lastEphemeris = 0;
+    updateTransportUi();
+    updateTimeReadout(state.timeAnchor, now, true);
+    describeView();
+  }
+
+  function initializePositionPanel() {
+    for (const planet of planets) {
+      const row = document.createElement("div");
+      row.className = "position-row";
+      const name = document.createElement("span");
+      name.className = "planet-name";
+      name.textContent = planet.name;
+      const longitude = document.createElement("span");
+      longitude.className = "longitude";
+      const distance = document.createElement("span");
+      distance.className = "distance";
+      row.append(name, longitude, distance);
+      positionList.append(row);
+      state.positionRows.set(planet.name, { longitude, distance });
+    }
+  }
+
+  function updatePositionPanel() {
+    for (const planet of planets) {
+      const vector = state.vectors.get(planet.name);
+      const row = state.positionRows.get(planet.name);
+      if (!vector || !row) continue;
+      const longitude = wrap(Math.atan2(vector.y, vector.x) / DEG);
+      const distance = Math.hypot(vector.x, vector.y, vector.z);
+      row.longitude.textContent = `${longitude.toFixed(1)}°`;
+      row.distance.textContent = `${distance.toFixed(distance < 10 ? 2 : 1)} AU`;
+    }
+  }
+
   // The live camera is a mutable copy of a preset, so dragging never damages
   // the presets themselves — cycling with V always restores clean values.
   function view() {
-    return state.live;
+    return state.zenView || state.live;
   }
 
   function applyView(index = state.viewIndex) {
@@ -81,13 +264,132 @@
   }
 
   function refreshCamera() {
+    refreshProjection();
+    describeView();
+    updateReadout();
+  }
+
+  function refreshProjection() {
     state.basis = cameraBasis();
     const roll = (view().roll || 0) * DEG;
     state.roll = roll ? { cos: Math.cos(roll), sin: Math.sin(roll) } : null;
     const azimuth = view().azimuth * DEG;
     state.cameraAxis = { x: Math.cos(azimuth), y: Math.sin(azimuth) };
+  }
+
+  function initializeDreamOffsets() {
+    state.dreamOffsets.clear();
+    for (const planet of planets) {
+      const points = state.orbitVectors.get(planet.name);
+      const current = state.vectors.get(planet.name);
+      if (!points || !current) continue;
+      let nearest = 0;
+      let nearestDistance = Infinity;
+      for (let i = 0; i < points.length - 1; i++) {
+        const point = points[i];
+        const distance = Math.hypot(point.x - current.x, point.y - current.y, point.z - current.z);
+        if (distance < nearestDistance) {
+          nearest = i;
+          nearestDistance = distance;
+        }
+      }
+      state.dreamOffsets.set(planet.name, nearest);
+    }
+  }
+
+  function enterZen(mode = state.zenSelection) {
+    if (!ZEN_MODES.includes(mode)) mode = "astronomical";
+    const now = performance.now();
+
+    // Every Zen mode begins from the live Solar System. This also makes
+    // switching among modes predictable while testing them.
+    state.zenMode = null;
+    state.zenView = null;
+    returnToToday();
+    updateEphemeris(new Date(state.timeAnchor), now);
+
+    state.zenMode = mode;
+    state.zenSelection = mode;
+    state.zenStart = now;
+    state.zenBaseView = Object.assign({}, state.live);
+    state.zenView = Object.assign({}, state.live);
+    state.zenSpinStart.clear();
+    for (const planet of planets) state.zenSpinStart.set(planet.name, state.axes.get(planet.name).spin);
+    state.zenSpinStart.set("Moon", state.moonAxis.spin);
+    if (mode === "dream") initializeDreamOffsets();
+
+    state.timeAnchor = Date.now();
+    state.timeRealAnchor = now;
+    state.timeDirection = 1;
+    state.paused = false;
+    state.lastEphemeris = 0;
+    zenModeSelect.value = mode;
+    zenIndicator.textContent = ZEN_LABELS[mode];
+    zenToggle.setAttribute("aria-pressed", "true");
+    wallpaper.classList.add("zen-active");
+    refreshProjection();
+  }
+
+  function exitZen() {
+    if (!state.zenMode) return;
+    state.zenMode = null;
+    state.zenView = null;
+    state.zenBaseView = null;
+    state.dreamOffsets.clear();
+    zenIndicator.textContent = "";
+    zenToggle.setAttribute("aria-pressed", "false");
+    wallpaper.classList.remove("zen-active");
+    returnToToday();
+    refreshCamera();
+    state.lastInteraction = performance.now();
+  }
+
+  function cycleZenMode() {
+    if (!state.zenMode) {
+      enterZen(state.zenSelection);
+      return;
+    }
+    const index = ZEN_MODES.indexOf(state.zenMode);
+    enterZen(ZEN_MODES[(index + 1) % ZEN_MODES.length]);
+  }
+
+  function updateZenCamera(now) {
+    if (!state.zenMode || !state.zenBaseView) return;
+    const seconds = (now - state.zenStart) / 1000;
+    const base = state.zenBaseView;
+    const still = reducedMotion ? 0 : 1;
+    state.zenView = Object.assign({}, base, {
+      elevation: base.elevation + still * 1.5 * Math.sin(seconds * Math.PI * 2 / 71),
+      azimuth: base.azimuth + still * 2.0 * Math.sin(seconds * Math.PI * 2 / 113),
+      roll: wrap((base.roll || 0) + still * .5 * Math.sin(seconds * Math.PI * 2 / 89)),
+      zoom: base.zoom * (1 + still * .01 * Math.sin(seconds * Math.PI * 2 / 59)),
+      sunX: base.sunX + still * .010 * Math.sin(seconds * Math.PI * 2 / 101),
+      sunY: base.sunY + still * .008 * Math.sin(seconds * Math.PI * 2 / 137)
+    });
+    refreshProjection();
+  }
+
+  function setEarthFocus(enabled = !state.earthFocus) {
+    state.earthFocus = Boolean(enabled);
+    earthFocus.setAttribute("aria-pressed", String(state.earthFocus));
+    wallpaper.classList.toggle("earth-focus", state.earthFocus);
+    state.lastInteraction = performance.now();
     describeView();
-    updateReadout();
+  }
+
+  function setEarthLighting(mode) {
+    const modes = ["accurate", "demo", "off"];
+    state.earthLightingMode = modes.includes(mode) ? mode : "accurate";
+    earthLightingMode.value = state.earthLightingMode;
+    if (state.earthLightingMode === "demo") state.eclipseDemoStart = performance.now();
+    state.lastInteraction = performance.now();
+    describeView();
+  }
+
+  function cycleEarthLighting() {
+    if (!state.earthFocus) return;
+    const modes = ["accurate", "demo", "off"];
+    setEarthLighting(modes[(modes.indexOf(state.earthLightingMode) + 1) % modes.length]);
   }
 
   function markCustom() {
@@ -96,9 +398,12 @@
 
   function describeView() {
     if (!state.ephemerisDate) return;
-    const stamp = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })
-      .format(state.ephemerisDate);
-    status.textContent = `Live positions · ${stamp} · ${view().name.toLowerCase()} view, ${Math.round(view().elevation)}° above ecliptic`;
+    const stamp = statusFormatter.format(state.ephemerisDate);
+    const nearNow = Math.abs(state.ephemerisDate.getTime() - Date.now()) < 5 * 60000;
+    const live = nearNow && !state.paused && state.timeDirection === 1 && state.speedIndex === 0;
+    const lighting = state.earthLightingMode === "demo" ? "eclipse demo" : state.earthLightingMode === "accurate" ? "dated light" : "light off";
+    const framing = state.earthFocus ? `earth focus, ${lighting}` : `${view().name.toLowerCase()} view, ${Math.round(view().elevation)}° above ecliptic`;
+    status.textContent = `${live ? "Live" : "Simulated"} positions · ${stamp} · ${framing}`;
   }
 
   function updateReadout() {
@@ -192,10 +497,32 @@
     return Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), eqj);
   }
 
-  function updateEphemeris(date = new Date()) {
-    for (const planet of planets) state.vectors.set(planet.name, eclipticVector(planet.name, date));
+  function rotationalState(body, date) {
+    const axis = Astronomy.RotationAxis(Astronomy.Body[body], date);
+    const ra = axis.ra * DEG;
+    // At W=0 this equatorial direction lies on the body's prime meridian.
+    // Carrying it with the pole allows an exact sub-camera longitude later.
+    const referenceEqj = {
+      x: -Math.sin(ra),
+      y: Math.cos(ra),
+      z: 0,
+      t: axis.north.t
+    };
+    return {
+      pole: Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), axis.north),
+      reference: Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), referenceEqj),
+      spin: axis.spin / 360
+    };
+  }
+
+  function updateEphemeris(date = new Date(simulatedTime()), sampledAt = performance.now()) {
+    for (const planet of planets) {
+      state.vectors.set(planet.name, eclipticVector(planet.name, date));
+      state.axes.set(planet.name, rotationalState(planet.name, date));
+    }
     const moonEqj = Astronomy.GeoVector(Astronomy.Body.Moon, date, true);
     state.moonVector = Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), moonEqj);
+    state.moonAxis = rotationalState("Moon", date);
 
     if (!state.orbitVectors.size) {
       for (const planet of planets) {
@@ -207,9 +534,20 @@
         }
         state.orbitVectors.set(planet.name, points);
       }
+
+      // One real geocentric lunar revolution for the close Earth scene.
+      // Directions are normalized later so the illustrated orbit can remain
+      // readable without pretending the Earth-Moon distance is to scale.
+      const moonPeriod = 27.321661;
+      for (let i = 0; i <= 120; i++) {
+        const offset = (i / 120 - 0.5) * moonPeriod * DAY;
+        const vector = Astronomy.GeoVector(Astronomy.Body.Moon, new Date(date.getTime() + offset), true);
+        state.moonOrbitVectors.push(Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), vector));
+      }
     }
-    state.lastEphemeris = Date.now();
+    state.lastEphemeris = sampledAt;
     state.ephemerisDate = date;
+    updatePositionPanel();
     describeView();
   }
 
@@ -218,6 +556,25 @@
     const displayRadius = Math.pow(Math.min(radius, 35) / 30.1, 0.28);
     const factor = displayRadius / radius;
     return { x: vector.x * factor, y: vector.y * factor, z: vector.z * factor };
+  }
+
+  function displayVector(planet, now) {
+    if (state.zenMode !== "dream") return state.vectors.get(planet.name);
+    const points = state.orbitVectors.get(planet.name);
+    const start = state.dreamOffsets.get(planet.name) || 0;
+    if (!points || points.length < 2) return state.vectors.get(planet.name);
+    const count = points.length - 1;
+    const elapsed = (now - state.zenStart) / 1000;
+    const position = (start + (elapsed / DREAM_PERIODS[planet.name]) * count) % count;
+    const index = Math.floor(position);
+    const mix = position - index;
+    const a = points[index];
+    const b = points[(index + 1) % count];
+    return {
+      x: a.x + (b.x - a.x) * mix,
+      y: a.y + (b.y - a.y) * mix,
+      z: a.z + (b.z - a.z) * mix
+    };
   }
 
   function viewScale() {
@@ -248,6 +605,89 @@
   }
 
   const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const cross = (a, b) => ({
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x
+  });
+
+  const vectorLength = vector => Math.hypot(vector.x, vector.y, vector.z);
+
+  function normalized(vector) {
+    const length = vectorLength(vector) || 1;
+    return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
+  }
+
+  function rotateAroundAxis(vector, axis, angle) {
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    const perpendicular = cross(axis, vector);
+    const parallel = dot(axis, vector) * (1 - cosine);
+    return {
+      x: vector.x * cosine + perpendicular.x * sine + axis.x * parallel,
+      y: vector.y * cosine + perpendicular.y * sine + axis.y * parallel,
+      z: vector.z * cosine + perpendicular.z * sine + axis.z * parallel
+    };
+  }
+
+  // Project Astronomy Engine's date-specific rotational pole through the live
+  // camera. Its spin value is the body's real rotational phase in turns.
+  function projectedAxis(axis) {
+    const pole = axis.pole;
+    const screen = rolledOffset(
+      dot(pole, state.basis.right),
+      -dot(pole, state.basis.up)
+    );
+    return {
+      // Rotation that carries local screen-up onto the projected north pole.
+      angle: Math.atan2(screen.x, -screen.y),
+      // A circular equatorial ring foreshortens by this amount.
+      flatten: clamp(Math.abs(dot(pole, state.basis.toward)), 0.08, 1),
+      spin: axis.spin
+    };
+  }
+
+  function cameraFacingTexture(axis) {
+    const projected = projectedAxis(axis);
+    const phase = axis.spin - Math.floor(axis.spin);
+    const prime = rotateAroundAxis(axis.reference, axis.pole, phase * Math.PI * 2);
+    const alongPole = dot(state.basis.toward, axis.pole);
+    const equatorialView = {
+      x: state.basis.toward.x - axis.pole.x * alongPole,
+      y: state.basis.toward.y - axis.pole.y * alongPole,
+      z: state.basis.toward.z - axis.pole.z * alongPole
+    };
+    const viewLength = Math.hypot(equatorialView.x, equatorialView.y, equatorialView.z);
+    if (viewLength < 1e-7) return { rotation: phase, longitudeSign: 1 };
+    equatorialView.x /= viewLength;
+    equatorialView.y /= viewLength;
+    equatorialView.z /= viewLength;
+
+    const primeEast = cross(axis.pole, prime);
+    const longitude = Math.atan2(dot(equatorialView, primeEast), dot(equatorialView, prime));
+    const centerEast = cross(axis.pole, equatorialView);
+    const screenEast = rolledOffset(
+      dot(centerEast, state.basis.right),
+      -dot(centerEast, state.basis.up)
+    );
+    const localRight = { x: Math.cos(projected.angle), y: Math.sin(projected.angle) };
+    const longitudeSign = screenEast.x * localRight.x + screenEast.y * localRight.y < 0 ? -1 : 1;
+    return { rotation: longitude / (Math.PI * 2), longitudeSign };
+  }
+
+  function zenSpin(name, actualSpin, now) {
+    if (state.zenMode !== "ambient" && state.zenMode !== "dream") return actualSpin;
+    const start = state.zenSpinStart.get(name) ?? actualSpin;
+    const direction = name === "Venus" || name === "Uranus" ? -1 : 1;
+    const elapsed = (now - state.zenStart) / 1000;
+    return start + direction * elapsed / ZEN_SPIN_PERIODS[name];
+  }
+
+  function projectedPole(planet, now) {
+    const projected = projectedAxis(state.axes.get(planet.name));
+    projected.spin = zenSpin(planet.name, projected.spin, now);
+    return projected;
+  }
 
   // Roll is a plain 2D rotation of the finished projection about the Sun, so it
   // applies identically to rings, planets and debris and costs nothing.
@@ -308,6 +748,18 @@
 
   function strokeArc(slice, alpha) {
     ctx.save();
+
+    // Keep every painted orbit clear of solid bodies. Depth sorting still
+    // decides which arcs are near or far everywhere else, but a small halo
+    // around each disc prevents a foreground arc from being painted across a
+    // planet's texture.
+    for (const body of state.orbitOccluders) {
+      ctx.beginPath();
+      ctx.rect(-1, -1, state.width + 2, state.height + 2);
+      ctx.arc(body.x, body.y, body.radius + 3.5, 0, Math.PI * 2);
+      ctx.clip("evenodd");
+    }
+
     ctx.beginPath();
     ctx.moveTo(slice[0].x, slice[0].y);
     for (let i = 1; i < slice.length; i++) ctx.lineTo(slice[i].x, slice[i].y);
@@ -445,27 +897,81 @@
     return { x: dx / length, y: dy / length };
   }
 
-  function drawTexturedSphere(image, x, y, radius, rotation, isSun = false, light = { x: -0.6, y: -0.7 }) {
-    const diameter = Math.ceil(radius * 2);
+  function renderSphereTexture(image, radius, rotation, longitudeSign = 1) {
+    let buffer = state.sphereBuffers.get(image);
+    if (!buffer) {
+      const canvas = document.createElement("canvas");
+      buffer = { canvas, context: canvas.getContext("2d", { alpha: true }) };
+      state.sphereBuffers.set(image, buffer);
+    }
+
+    const pixelRadius = Math.max(2, Math.ceil(radius * state.dpr));
+    const padding = 2;
+    const diameter = pixelRadius * 2;
+    const size = diameter + padding * 2;
+    const resized = buffer.canvas.width !== size || buffer.canvas.height !== size;
+    if (resized) {
+      buffer.canvas.width = size;
+      buffer.canvas.height = size;
+    }
+
+    const phase = rotation - Math.floor(rotation);
+    const phaseGap = buffer.phase == null ? Infinity : Math.abs(phase - buffer.phase);
+    const wrappedGap = Math.min(phaseGap, 1 - Math.min(phaseGap, 1));
+    const needsRedraw = resized || buffer.longitudeSign !== longitudeSign || wrappedGap > .25 / image.width;
+    if (!needsRedraw) {
+      return { canvas: buffer.canvas, displaySize: size * radius / pixelRadius };
+    }
+    buffer.phase = phase;
+    buffer.longitudeSign = longitudeSign;
+
+    const bctx = buffer.context;
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    bctx.clearRect(0, 0, size, size);
+    bctx.imageSmoothingEnabled = true;
+    bctx.imageSmoothingQuality = "high";
+    bctx.save();
+    bctx.beginPath();
+    bctx.arc(size / 2, size / 2, pixelRadius + .25, 0, Math.PI * 2);
+    bctx.clip();
+
+    // Assemble the longitude slices on an axis-aligned offscreen surface.
+    // Their small overlap seals sampling gaps without softening the artwork.
+    for (let column = 0; column < diameter; column++) {
+      const nx = (column + .5 - pixelRadius) / pixelRadius;
+      if (Math.abs(nx) > 1) continue;
+      const longitude = longitudeSign * Math.asin(nx) / (Math.PI * 2);
+      let u = phase + longitude + .5;
+      u -= Math.floor(u);
+      const sourceX = Math.floor(u * image.width) % image.width;
+      bctx.drawImage(image, sourceX, 0, 1, image.height, padding + column - .25, padding, 1.5, diameter);
+    }
+    bctx.restore();
+
+    return {
+      canvas: buffer.canvas,
+      displaySize: size * radius / pixelRadius
+    };
+  }
+
+  function drawTexturedSphere(image, x, y, radius, rotation, isSun = false, light = { x: -0.6, y: -0.7 }, axisAngle = 0, longitudeSign = 1, physicalLighting = false) {
     ctx.save();
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.clip();
 
-    for (let column = 0; column < diameter; column++) {
-      const nx = (column + .5 - radius) / radius;
-      if (Math.abs(nx) > 1) continue;
-      // A visible hemisphere spans 180°—half of a 2:1 equirectangular map.
-      // The previous full-width sampling compressed an entire world onto the
-      // front disc; this keeps the wrapping consistent with the 3D prototype.
-      const longitude = Math.asin(nx) / (Math.PI * 2);
-      let u = rotation + longitude + .5;
-      u = u - Math.floor(u);
-      const sourceX = Math.floor(u * image.width) % image.width;
-      ctx.drawImage(image, sourceX, 0, 1, image.height, x - radius + column, y - radius, 1.2, radius * 2);
-    }
+    // Rotate one completed texture disc instead of rotating hundreds of
+    // independently antialiased strips. This keeps axial tilt without seams.
+    const texture = renderSphereTexture(image, radius, rotation, longitudeSign);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(axisAngle);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(texture.canvas, -texture.displaySize / 2, -texture.displaySize / 2, texture.displaySize, texture.displaySize);
+    ctx.restore();
 
-    if (!isSun) {
+    if (!isSun && !physicalLighting) {
       // Almost-flat illumination keeps every body in the same watercolor plane
       // as the background. Direction is still readable, but there is no hard
       // terminator or glossy 3D crescent.
@@ -489,7 +995,7 @@
       rim.addColorStop(1, "rgba(255, 200, 130, 0)");
       ctx.fillStyle = rim;
       ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    } else {
+    } else if (isSun) {
       ctx.globalCompositeOperation = "screen";
       const core = ctx.createRadialGradient(x - radius * .25, y - radius * .3, 0, x, y, radius);
       core.addColorStop(0, "rgba(255,255,225,.10)");
@@ -525,13 +1031,13 @@
     ctx.restore();
   }
 
-  function drawSaturnRings(x, y, radius, front = false) {
-    // The ring plane sits near the ecliptic, so it foreshortens with the view
-    // tilt exactly as the orbits do. Floored so it never collapses to a hairline.
-    const flatten = Math.max(Math.sin(view().elevation * DEG), 0.14);
+  function drawSaturnRings(x, y, radius, pole, front = false) {
+    // Saturn's rings lie in its equatorial plane. Their angle and
+    // foreshortening therefore come from Saturn's real projected pole.
+    const flatten = pole.flatten;
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate((-8 + (view().roll || 0)) * DEG);
+    ctx.rotate(pole.angle);
     ctx.scale(1, flatten);
     ctx.lineCap = "round";
     ctx.setLineDash(front ? [radius * .68, radius * .10, radius * .12, radius * .16] : [radius * .82, radius * .08, radius * .18, radius * .13]);
@@ -592,16 +1098,22 @@
   // enlarged so the companion remains legible at wallpaper scale. Its orbit is
   // split into depth-bearing painted arcs, just like the planetary paths: the
   // far half paints before Earth and the near half paints after it.
-  function collectMoonSystem(earthPoint, earthRadius, elapsed, out) {
+  function collectMoonSystem(earthPoint, earthRadius, now, out) {
     if (!state.moonVector) return;
     const basis = state.basis;
     const distance = Math.max(earthRadius * 3.0, 24);
     const length = Math.hypot(state.moonVector.x, state.moonVector.y, state.moonVector.z) || 1;
-    const moonDirection = {
-      x: state.moonVector.x / length,
-      y: state.moonVector.y / length,
-      z: state.moonVector.z / length
-    };
+    let moonDirection;
+    if (state.zenMode === "dream") {
+      const angle = ((now - state.zenStart) / 1000 / 38) * Math.PI * 2;
+      moonDirection = { x: Math.cos(angle), y: Math.sin(angle) * Math.cos(5.15 * DEG), z: Math.sin(angle) * Math.sin(5.15 * DEG) };
+    } else {
+      moonDirection = {
+        x: state.moonVector.x / length,
+        y: state.moonVector.y / length,
+        z: state.moonVector.z / length
+      };
+    }
 
     if (state.orbits) {
       const points = [];
@@ -646,26 +1158,359 @@
       depth: earthPoint.depth - dot(moonDirection, basis.toward) * .035
     };
     const moonRadius = Math.max(3.4, earthRadius * .28);
+    const moonPole = projectedAxis(state.moonAxis);
+    moonPole.spin = zenSpin("Moon", moonPole.spin, now);
+    state.orbitOccluders.push({ x: moonPoint.x, y: moonPoint.y, radius: moonRadius });
     out.push({
       depth: moonPoint.depth,
       draw: () => {
-        const rotation = elapsed / 145000;
         const light = lightDirection(moonPoint.x, moonPoint.y);
-        drawTexturedSphere(state.images.get("Moon"), moonPoint.x, moonPoint.y, moonRadius, rotation, false, light);
+        drawTexturedSphere(state.images.get("Moon"), moonPoint.x, moonPoint.y, moonRadius, moonPole.spin, false, light, moonPole.angle);
         if (state.labels) drawLabel("Moon", moonPoint.x, moonPoint.y, moonRadius);
       }
     });
   }
 
+  function earthToSunVector() {
+    const earth = state.vectors.get("Earth");
+    return earth ? { x: -earth.x, y: -earth.y, z: -earth.z } : { x: 1, y: 0, z: 0 };
+  }
+
+  function earthFocusSunVector() {
+    const actual = earthToSunVector();
+    if (state.earthLightingMode !== "demo" || !state.basis) return actual;
+    // Keep the teaching eclipse on the visible hemisphere. The demo label and
+    // selector make this deliberately staged direction distinct from Accurate.
+    const direction = normalized({
+      x: state.basis.toward.x * .82 + state.basis.right.x * .45 + state.basis.up.x * .16,
+      y: state.basis.toward.y * .82 + state.basis.right.y * .45 + state.basis.up.y * .16,
+      z: state.basis.toward.z * .82 + state.basis.right.z * .45 + state.basis.up.z * .16
+    });
+    const distance = vectorLength(actual);
+    return { x: direction.x * distance, y: direction.y * distance, z: direction.z * distance };
+  }
+
+  function earthFocusMoonVector(now) {
+    if (state.earthLightingMode === "demo") {
+      const sunward = normalized(earthFocusSunVector());
+      const distance = vectorLength(state.moonVector) || .00257;
+      let across = normalized(cross(sunward, { x: 0, y: 0, z: 1 }));
+      if (vectorLength(across) < .1) across = normalized(cross(sunward, { x: 1, y: 0, z: 0 }));
+      const vertical = normalized(cross(sunward, across));
+      const phase = reducedMotion ? 0 : ((now - state.eclipseDemoStart) / 24000) * Math.PI * 2;
+      const sweep = Math.sin(phase) * EARTH_RADIUS_AU * .84;
+      const bow = Math.sin(phase * .5) * EARTH_RADIUS_AU * .12;
+      return {
+        x: sunward.x * distance + across.x * sweep + vertical.x * bow,
+        y: sunward.y * distance + across.y * sweep + vertical.y * bow,
+        z: sunward.z * distance + across.z * sweep + vertical.z * bow
+      };
+    }
+    return state.moonVector;
+  }
+
+  function earthFocusMoonDirection(now, moonVector = earthFocusMoonVector(now)) {
+    const length = vectorLength(moonVector) || 1;
+    if (state.zenMode !== "dream" || state.earthLightingMode === "demo") {
+      return {
+        x: moonVector.x / length,
+        y: moonVector.y / length,
+        z: moonVector.z / length
+      };
+    }
+
+    // Dream deliberately replaces the shared calendar with a presentation
+    // orbit. Every other Earth Focus mode uses the exact geocentric direction.
+    const base = Math.atan2(moonVector.y, moonVector.x);
+    const period = 58;
+    const angle = base + ((now - state.zenStart) / 1000 / period) * Math.PI * 2;
+    const tilt = 5.15 * DEG;
+    return {
+      x: Math.cos(angle),
+      y: Math.sin(angle) * Math.cos(tilt),
+      z: Math.sin(angle) * Math.sin(tilt)
+    };
+  }
+
+  function screenLight(vector) {
+    const light = normalized(vector);
+    return {
+      x: dot(light, state.basis.right),
+      y: -dot(light, state.basis.up),
+      z: dot(light, state.basis.toward)
+    };
+  }
+
+  function lightingMask(radius, light, darkness) {
+    const diameter = Math.max(8, Math.min(380, Math.round(radius * 2)));
+    const quantize = value => Math.round(value * 50);
+    const key = `${diameter}:${quantize(light.x)}:${quantize(light.y)}:${quantize(light.z)}:${darkness}`;
+    if (state.lightingBuffers.has(key)) return state.lightingBuffers.get(key);
+
+    const buffer = document.createElement("canvas");
+    buffer.width = diameter;
+    buffer.height = diameter;
+    const bctx = buffer.getContext("2d");
+    const pixels = bctx.createImageData(diameter, diameter);
+    const half = diameter / 2;
+    for (let y = 0; y < diameter; y++) {
+      for (let x = 0; x < diameter; x++) {
+        const nx = (x + .5 - half) / half;
+        const ny = (y + .5 - half) / half;
+        const disc = 1 - nx * nx - ny * ny;
+        if (disc <= 0) continue;
+        const nz = Math.sqrt(disc);
+        const incidence = nx * light.x + ny * light.y + nz * light.z;
+        const blend = clamp((incidence + .075) / .18, 0, 1);
+        const smooth = blend * blend * (3 - 2 * blend);
+        const alpha = darkness * (1 - smooth);
+        const index = (y * diameter + x) * 4;
+        pixels.data[index] = 7;
+        pixels.data[index + 1] = 15;
+        pixels.data[index + 2] = 34;
+        pixels.data[index + 3] = Math.round(alpha * 255);
+      }
+    }
+    bctx.putImageData(pixels, 0, 0);
+    state.lightingBuffers.set(key, buffer);
+    if (state.lightingBuffers.size > 90) state.lightingBuffers.delete(state.lightingBuffers.keys().next().value);
+    return buffer;
+  }
+
+  function drawPhysicalLighting(x, y, radius, lightVector, body) {
+    if (state.earthLightingMode === "off") return;
+    const light = screenLight(lightVector);
+    const mask = lightingMask(radius, light, body === "Earth" ? .66 : .72);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(mask, x - radius, y - radius, radius * 2, radius * 2);
+    ctx.restore();
+  }
+
+  function drawShadowCircle(body, center, radius, shadow) {
+    if (!shadow || shadow.penumbra <= 0) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
+    ctx.clip();
+    const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, shadow.penumbra);
+    gradient.addColorStop(0, shadow.umbra > 0 ? "rgba(13, 15, 26, .88)" : "rgba(45, 31, 35, .60)");
+    const umbraStop = clamp(shadow.umbra / shadow.penumbra, .012, .92);
+    gradient.addColorStop(umbraStop, shadow.umbra > 0 ? "rgba(25, 24, 34, .76)" : "rgba(70, 46, 42, .46)");
+    gradient.addColorStop(Math.min(.98, umbraStop + .2), "rgba(39, 35, 44, .25)");
+    gradient.addColorStop(1, "rgba(39, 35, 44, 0)");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, shadow.penumbra, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+  }
+
+  function drawSolarEclipseShadow(earthBody, moonVector, sunVector) {
+    const ray = normalized({ x: moonVector.x - sunVector.x, y: moonVector.y - sunVector.y, z: moonVector.z - sunVector.z });
+    const along = -dot(moonVector, ray);
+    if (along <= 0) return;
+    const closest = {
+      x: moonVector.x + ray.x * along,
+      y: moonVector.y + ray.y * along,
+      z: moonVector.z + ray.z * along
+    };
+    const sunMoonDistance = vectorLength({ x: sunVector.x - moonVector.x, y: sunVector.y - moonVector.y, z: sunVector.z - moonVector.z });
+    const penumbraAu = MOON_RADIUS_AU + along * (SUN_RADIUS_AU + MOON_RADIUS_AU) / sunMoonDistance;
+    if (vectorLength(closest) > EARTH_RADIUS_AU + penumbraAu) return;
+    const discriminant = dot(moonVector, ray) ** 2 - (dot(moonVector, moonVector) - EARTH_RADIUS_AU ** 2);
+    if (discriminant < 0) return;
+    const hitDistance = -dot(moonVector, ray) - Math.sqrt(discriminant);
+    const hit = {
+      x: moonVector.x + ray.x * hitDistance,
+      y: moonVector.y + ray.y * hitDistance,
+      z: moonVector.z + ray.z * hitDistance
+    };
+    const normal = normalized(hit);
+    if (dot(normal, state.basis.toward) < -.08) return;
+    const umbraAu = MOON_RADIUS_AU - hitDistance * (SUN_RADIUS_AU - MOON_RADIUS_AU) / sunMoonDistance;
+    const shadow = {
+      penumbra: penumbraAu / EARTH_RADIUS_AU * earthBody.radius,
+      umbra: umbraAu / EARTH_RADIUS_AU * earthBody.radius
+    };
+    const center = {
+      x: earthBody.x + dot(normal, state.basis.right) * earthBody.radius,
+      y: earthBody.y - dot(normal, state.basis.up) * earthBody.radius
+    };
+    drawShadowCircle(earthBody, center, earthBody.radius, shadow);
+  }
+
+  function drawLunarEclipseShadow(moonBody, moonVector, sunVector) {
+    const axis = normalized({ x: -sunVector.x, y: -sunVector.y, z: -sunVector.z });
+    const along = dot(moonVector, axis);
+    if (along <= 0) return;
+    const offset = {
+      x: moonVector.x - axis.x * along,
+      y: moonVector.y - axis.y * along,
+      z: moonVector.z - axis.z * along
+    };
+    const sunDistance = vectorLength(sunVector);
+    const penumbraAu = EARTH_RADIUS_AU + along * (SUN_RADIUS_AU + EARTH_RADIUS_AU) / sunDistance;
+    if (vectorLength(offset) > penumbraAu + MOON_RADIUS_AU) return;
+    const umbraAu = Math.max(0, EARTH_RADIUS_AU - along * (SUN_RADIUS_AU - EARTH_RADIUS_AU) / sunDistance);
+    const shadowCenterVector = { x: -offset.x, y: -offset.y, z: -offset.z };
+    const center = {
+      x: moonBody.x + dot(shadowCenterVector, state.basis.right) / MOON_RADIUS_AU * moonBody.radius,
+      y: moonBody.y - dot(shadowCenterVector, state.basis.up) / MOON_RADIUS_AU * moonBody.radius
+    };
+    drawShadowCircle(moonBody, center, moonBody.radius, {
+      penumbra: penumbraAu / MOON_RADIUS_AU * moonBody.radius,
+      umbra: umbraAu / MOON_RADIUS_AU * moonBody.radius
+    });
+  }
+
+  function drawEarthFocusMoonOrbit(center, distance) {
+    if (!state.moonOrbitVectors.length) return;
+    const points = state.moonOrbitVectors.map(vector => {
+      const length = Math.hypot(vector.x, vector.y, vector.z) || 1;
+      const direction = { x: vector.x / length, y: vector.y / length, z: vector.z / length };
+      return {
+        x: center.x + dot(direction, state.basis.right) * distance,
+        y: center.y - dot(direction, state.basis.up) * distance,
+        depth: -dot(direction, state.basis.toward)
+      };
+    });
+    let nearest = Infinity;
+    let farthest = -Infinity;
+    for (const point of points) {
+      nearest = Math.min(nearest, point.depth);
+      farthest = Math.max(farthest, point.depth);
+    }
+    const span = farthest - nearest || 1;
+    for (let i = 0; i < points.length - 1; i += 5) {
+      const slice = points.slice(i, Math.min(i + 6, points.length));
+      const depth = slice.reduce((sum, point) => sum + point.depth, 0) / slice.length;
+      const away = (depth - nearest) / span;
+      strokeArc(slice, .86 * (1 - away * .66));
+    }
+  }
+
+  function drawEarthFocus(now) {
+    const earth = planets.find(planet => planet.name === "Earth");
+    const baseView = state.zenBaseView || state.live;
+    const driftX = (view().sunX - baseView.sunX) * state.width * .65;
+    const driftY = (view().sunY - baseView.sunY) * state.height * .65;
+    const zoomBreath = clamp(view().zoom / baseView.zoom, .96, 1.04);
+    const radius = clamp(Math.min(state.width, state.height) * .19, 76, 190) * zoomBreath;
+    const center = {
+      x: state.width * .5 + driftX,
+      y: state.height * .51 + driftY
+    };
+
+    const moonVector = earthFocusMoonVector(now);
+    const moonDirection = earthFocusMoonDirection(now, moonVector);
+    const moonDistance = radius * 2.18;
+    const moon = {
+      x: center.x + dot(moonDirection, state.basis.right) * moonDistance,
+      y: center.y - dot(moonDirection, state.basis.up) * moonDistance,
+      depth: -dot(moonDirection, state.basis.toward),
+      radius: radius * .273
+    };
+
+    state.orbitOccluders = [
+      { x: center.x, y: center.y, radius },
+      { x: moon.x, y: moon.y, radius: moon.radius }
+    ];
+    if (state.orbits && state.earthLightingMode !== "demo") drawEarthFocusMoonOrbit(center, moonDistance);
+
+    const earthAxis = state.axes.get("Earth");
+    const earthPole = projectedAxis(earthAxis);
+    const moonPole = projectedAxis(state.moonAxis);
+    let earthLongitudeSign = 1;
+    let moonLongitudeSign = 1;
+    if (state.zenMode === "dream") {
+      earthPole.spin = zenSpin("Earth", earthPole.spin, now);
+      moonPole.spin = zenSpin("Moon", moonPole.spin, now);
+    } else {
+      const earthFacing = cameraFacingTexture(earthAxis);
+      const moonFacing = cameraFacingTexture(state.moonAxis);
+      earthPole.spin = earthFacing.rotation;
+      moonPole.spin = moonFacing.rotation;
+      earthLongitudeSign = earthFacing.longitudeSign;
+      moonLongitudeSign = moonFacing.longitudeSign;
+    }
+    const sunVector = earthFocusSunVector();
+    const moonSunVector = {
+      x: sunVector.x - moonVector.x,
+      y: sunVector.y - moonVector.y,
+      z: sunVector.z - moonVector.z
+    };
+    const earthLight = screenLight(sunVector);
+    const moonLight = screenLight(moonSunVector);
+    const earthBody = { x: center.x, y: center.y, radius };
+    const moonBody = { x: moon.x, y: moon.y, radius: moon.radius };
+
+    const paintEarth = () => {
+      drawTexturedSphere(state.images.get("Earth"), center.x, center.y, radius, earthPole.spin, false, earthLight, earthPole.angle, earthLongitudeSign, true);
+      drawPhysicalLighting(center.x, center.y, radius, sunVector, "Earth");
+      if (state.earthLightingMode !== "off") drawSolarEclipseShadow(earthBody, moonVector, sunVector);
+      if (state.labels) drawLabel("Earth", center.x, center.y, radius);
+    };
+    const paintMoon = () => {
+      drawTexturedSphere(state.images.get("Moon"), moon.x, moon.y, moon.radius, moonPole.spin, false, moonLight, moonPole.angle, moonLongitudeSign, true);
+      drawPhysicalLighting(moon.x, moon.y, moon.radius, moonSunVector, "Moon");
+      if (state.earthLightingMode !== "off") drawLunarEclipseShadow(moonBody, moonVector, sunVector);
+      if (state.labels) drawLabel("Moon", moon.x, moon.y, moon.radius);
+    };
+
+    if (moon.depth > 0) paintMoon();
+    paintEarth();
+    if (moon.depth <= 0) paintMoon();
+  }
+
   function render(now) {
     requestAnimationFrame(render);
-    if (now - state.lastFrame < 1000 / 30) return;
+    if (!state.zenMode && !reducedMotion && now - state.lastInteraction >= 45000) {
+      enterZen(state.zenSelection);
+    }
+    const frameRate = state.zenMode ? 24 : 30;
+    if (now - state.lastFrame < 1000 / frameRate) return;
     state.lastFrame = now;
-    if (Date.now() - state.lastEphemeris > 60000) updateEphemeris();
+    updateZenCamera(now);
+    const dateMs = simulatedTime(now);
+    updateTimeReadout(dateMs, now);
+    const ephemerisInterval = state.zenMode === "astronomical" ? 1000 / 24 : SPEEDS[state.speedIndex].refresh;
+    if (!state.lastEphemeris || (!state.paused && now - state.lastEphemeris >= ephemerisInterval)) {
+      updateEphemeris(new Date(dateMs), now);
+    }
 
     const elapsed = elapsedTime(now);
     ctx.clearRect(0, 0, state.width, state.height);
     drawTwinkles(elapsed);
+
+    if (state.earthFocus) {
+      drawEarthFocus(now);
+      return;
+    }
+
+    // Build screen-space body bounds before any orbit is painted. strokeArc
+    // uses these bounds as cut-outs, including when an arc is depth-sorted in
+    // front of a body.
+    const scale = Math.max(.72, Math.min(1.28, Math.min(state.width, state.height) / 820)) * view().bodies;
+    const bodyLayout = planets.map(planet => {
+      const point = project(displayVector(planet, now));
+      let radius = planet.radius * scale * point.size;
+      if (planet.name === "Earth") radius *= 1.18;
+      if (planet.name === "Jupiter") radius *= .92;
+      return { planet, point, radius, pole: projectedPole(planet, now) };
+    });
+    const sunResponsive = Math.max(0.72, Math.min(1.25, Math.min(state.width, state.height) / 820));
+    state.orbitOccluders = [
+      {
+        x: state.width * view().sunX,
+        y: state.height * view().sunY,
+        radius: 66 * sunResponsive * view().bodies * 1.35
+      },
+      ...bodyLayout.map(({ point, radius }) => ({ x: point.x, y: point.y, radius }))
+    ];
 
     // Rings, debris, planets and the Sun all go into one list and are sorted
     // together, so a near arc can cross in front of an outer planet and a far
@@ -681,24 +1526,18 @@
 
     drawables.push({ depth: project({ x: 0, y: 0, z: 0 }).depth, draw: () => drawSun(elapsed) });
 
-    const scale = Math.max(.72, Math.min(1.28, Math.min(state.width, state.height) / 820)) * view().bodies;
-    for (const planet of planets) {
-      const point = project(state.vectors.get(planet.name));
-      let radius = planet.radius * scale * point.size;
-      if (planet.name === "Earth") radius *= 1.18;
-      if (planet.name === "Jupiter") radius *= .92;
+    for (const { planet, point, radius, pole } of bodyLayout) {
       drawables.push({
         depth: point.depth,
         draw: () => {
-          if (planet.rings) drawSaturnRings(point.x, point.y, radius, false);
-          const rotation = elapsed / (planet.spin * 1000);
+          if (planet.rings) drawSaturnRings(point.x, point.y, radius, pole, false);
           const light = lightDirection(point.x, point.y);
-          drawTexturedSphere(state.images.get(planet.name), point.x, point.y, radius, rotation, false, light);
-          if (planet.rings) drawSaturnRings(point.x, point.y, radius, true);
+          drawTexturedSphere(state.images.get(planet.name), point.x, point.y, radius, pole.spin, false, light, pole.angle);
+          if (planet.rings) drawSaturnRings(point.x, point.y, radius, pole, true);
           if (state.labels) drawLabel(planet.name, point.x, point.y, radius);
         }
       });
-      if (planet.name === "Earth") collectMoonSystem(point, radius, elapsed, drawables);
+      if (planet.name === "Earth") collectMoonSystem(point, radius, now, drawables);
     }
 
     // Farthest first, so nearer things paint over them.
@@ -707,13 +1546,21 @@
   }
 
   function togglePause() {
+    const now = performance.now();
     if (state.paused) {
-      state.startTime = performance.now();
+      state.timeRealAnchor = now;
+      state.startTime = now;
       state.paused = false;
     } else {
-      state.frozenElapsed = elapsedTime(performance.now());
+      state.timeAnchor = simulatedTime(now);
+      state.timeRealAnchor = now;
+      state.frozenElapsed = elapsedTime(now);
       state.paused = true;
     }
+    state.lastEphemeris = 0;
+    updateTransportUi();
+    updateTimeReadout(state.timeAnchor, now, true);
+    describeView();
   }
 
   // ---- live camera control ------------------------------------------------
@@ -732,6 +1579,7 @@
   canvas.addEventListener("contextmenu", event => event.preventDefault());
 
   canvas.addEventListener("pointerdown", event => {
+    if (state.zenMode) { exitZen(); return; }
     drag.active = true;
     drag.mode = dragMode(event);
     drag.x = event.clientX;
@@ -741,6 +1589,7 @@
   });
 
   canvas.addEventListener("pointermove", event => {
+    if (state.zenMode) { exitZen(); return; }
     if (!drag.active) return;
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
@@ -768,6 +1617,7 @@
 
   canvas.addEventListener("wheel", event => {
     event.preventDefault();
+    if (state.zenMode) { exitZen(); return; }
     const v = view();
     const factor = Math.exp(-event.deltaY * 0.0015);
     if (event.altKey) {
@@ -796,13 +1646,48 @@
     setTimeout(describeView, 2600);
   }
 
+  reverseTime.addEventListener("click", () => setTimeDirection(-1));
+  pauseTime.addEventListener("click", togglePause);
+  forwardTime.addEventListener("click", () => setTimeDirection(1));
+  today.addEventListener("click", returnToToday);
+  earthFocus.addEventListener("click", () => setEarthFocus());
+  earthLightingMode.addEventListener("change", () => setEarthLighting(earthLightingMode.value));
+  for (const button of speedControls) {
+    button.addEventListener("click", () => setSimulationSpeed(Number(button.dataset.speed)));
+  }
+  zenModeSelect.addEventListener("change", () => { state.zenSelection = zenModeSelect.value; });
+  zenToggle.addEventListener("click", () => state.zenMode ? exitZen() : enterZen(state.zenSelection));
+
+  for (const type of ["pointermove", "pointerdown", "wheel"]) {
+    addEventListener(type, () => {
+      if (state.zenMode) exitZen();
+      else state.lastInteraction = performance.now();
+    }, { passive: true });
+  }
+
   addEventListener("resize", resize, { passive: true });
   addEventListener("keydown", event => {
     const key = event.key.toLowerCase();
+    state.lastInteraction = performance.now();
+    if (state.zenMode) {
+      if (key === "z") cycleZenMode();
+      else if (key === "e") setEarthFocus();
+      else if (key === "s" && state.earthFocus) cycleEarthLighting();
+      else exitZen();
+      event.preventDefault();
+      return;
+    }
+    if (key === "z") { cycleZenMode(); event.preventDefault(); return; }
+    if (key === "e") { setEarthFocus(); event.preventDefault(); return; }
+    if (key === "s" && state.earthFocus) { cycleEarthLighting(); event.preventDefault(); return; }
     if (event.code === "Space") { event.preventDefault(); togglePause(); }
     if (key === "l") state.labels = !state.labels;
     if (key === "o") state.orbits = !state.orbits;
     if (key === "h") help.hidden = !help.hidden;
+    if (key === "p") positions.hidden = !positions.hidden;
+    if (key === "t") returnToToday();
+    if (key === "[") setSimulationSpeed(state.speedIndex - 1);
+    if (key === "]") setSimulationSpeed(state.speedIndex + 1);
     if (key === "k") { camera.hidden = !camera.hidden; updateReadout(); }
     if (key === "c") copyPreset();
     if (key === "r") applyView();                       // discard edits
@@ -824,8 +1709,13 @@
     resize();
     try {
       await loadAssets();
+      initializePositionPanel();
+      updateTransportUi();
       applyView();
-      updateEphemeris();
+      const now = performance.now();
+      const dateMs = simulatedTime(now);
+      updateTimeReadout(dateMs, now, true);
+      updateEphemeris(new Date(dateMs), now);
       loading.classList.add("done");
       setTimeout(() => loading.remove(), 700);
       requestAnimationFrame(render);
