@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui, sans-serif;
+  background: #17243c;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #wallpaper {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body { background: #17243c; }
+
+#wallpaper {
+  position: relative;
+  isolation: isolate;
+  background: #17243c url("assets/milky-way.webp") center / cover no-repeat;
+}
+
+#wallpaper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 57% 48%, transparent 0 18%, rgba(11, 18, 35, .08) 62%, rgba(8, 14, 28, .28) 100%),
+    linear-gradient(180deg, rgba(14, 23, 42, .03), rgba(14, 23, 42, .14));
+  mix-blend-mode: multiply;
+}
+
+#scene {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+}
+
+#loading {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 14px;
+  justify-items: center;
+  color: rgba(255, 245, 221, .85);
+  font-size: 13px;
+  letter-spacing: .08em;
+  transition: opacity .6s ease;
+  background: rgba(18, 31, 53, .35);
+  backdrop-filter: blur(8px);
+}
+
+#loading.done { opacity: 0; pointer-events: none; }
+
+.loading-orbit {
+  width: 52px;
+  height: 20px;
+  border: 1px solid rgba(255, 234, 191, .65);
+  border-radius: 50%;
+  transform: rotate(-9deg);
+  animation: breathe 1.7s ease-in-out infinite;
+}
+
+.loading-orbit::after {
+  content: "";
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: -4px auto 0;
+  border-radius: 50%;
+  background: #f0bd72;
+  box-shadow: 0 0 12px rgba(240, 189, 114, .8);
+}
+
+#status {
+  position: absolute;
+  z-index: 3;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  color: rgba(248, 235, 210, .66);
+  font-size: 10px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 8px rgba(5, 10, 22, .8);
+  user-select: none;
+}
+
+#help {
+  position: absolute;
+  z-index: 5;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: min(350px, calc(100vw - 36px));
+  padding: 16px 18px;
+  display: grid;
+  gap: 7px;
+  color: rgba(255, 246, 225, .82);
+  background: rgba(20, 31, 52, .72);
+  border: 1px solid rgba(238, 207, 159, .18);
+  border-radius: 16px;
+  box-shadow: 0 14px 45px rgba(4, 8, 18, .28);
+  backdrop-filter: blur(18px);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#camera {
+  position: absolute;
+  z-index: 5;
+  top: max(18px, env(safe-area-inset-top));
+  right: max(18px, env(safe-area-inset-right));
+  margin: 0;
+  padding: 14px 16px;
+  color: rgba(255, 246, 225, .8);
+  background: rgba(20, 31, 52, .68);
+  border: 1px solid rgba(238, 207, 159, .18);
+  border-radius: 12px;
+  backdrop-filter: blur(18px);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+  user-select: text;
+  pointer-events: none;
+}
+
+#camera[hidden] { display: none; }
+
+#scene { touch-action: none; cursor: grab; }
+#scene:active { cursor: grabbing; }
+
+#help[hidden] { display: none; }
+#help strong { color: #f3d7a7; font-size: 13px; }
+#help span { opacity: .8; }
+kbd { font: inherit; color: #f1c67f; }
+
+@keyframes breathe {
+  50% { transform: rotate(-9deg) scale(1.08); opacity: .65; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-orbit { animation: none; }
+}

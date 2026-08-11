@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#17243c">
+  <title>Watercolor Solar System — Live</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="wallpaper" aria-label="A live watercolor view of the Solar System">
+    <canvas id="scene"></canvas>
+    <div id="loading" role="status">
+      <span class="loading-orbit"></span>
+      <span>Painting the planets…</span>
+    </div>
+    <div id="status" aria-live="polite"></div>
+    <pre id="camera" hidden aria-label="Camera parameters"></pre>
+    <aside id="help" hidden>
+      <strong>Live watercolor Solar System</strong>
+      <span>Planet centers use current heliocentric ephemerides.</span>
+      <span>Drag to orbit · shift-drag to roll · ⌘-drag to move the Sun · scroll to zoom · alt-scroll for perspective</span>
+      <span><kbd>V</kbd> preset · <kbd>K</kbd> readout · <kbd>C</kbd> copy preset · <kbd>R</kbd> reset · <kbd>L</kbd> labels · <kbd>O</kbd> orbits · <kbd>Space</kbd> pause · <kbd>H</kbd> help</span>
+    </aside>
+  </main>
+  <script src="vendor/astronomy.browser.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
