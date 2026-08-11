@@ -161,7 +161,8 @@
   async function loadAssets() {
     const jobs = [
       ...planets.map(planet => ({ key: planet.name, file: `${planet.name.toLowerCase()}.webp`, color: planet.color })),
-      { key: "Sun", file: "sun.webp", color: "#f2b156" }
+      { key: "Sun", file: "sun.webp", color: "#f2b156" },
+      { key: "Moon", file: "moon.webp", color: "#e8d7bd" }
     ];
     const missing = [];
     await Promise.all(jobs.map(async job => {
@@ -193,6 +194,8 @@
 
   function updateEphemeris(date = new Date()) {
     for (const planet of planets) state.vectors.set(planet.name, eclipticVector(planet.name, date));
+    const moonEqj = Astronomy.GeoVector(Astronomy.Body.Moon, date, true);
+    state.moonVector = Astronomy.RotateVector(Astronomy.Rotation_EQJ_ECL(), moonEqj);
 
     if (!state.orbitVectors.size) {
       for (const planet of planets) {
@@ -311,13 +314,25 @@
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
 
-    // Soft wash underneath, then a crisp hairline: reads as ink on damp paper.
-    ctx.strokeStyle = `rgba(236, 178, 116, ${0.09 * alpha})`;
-    ctx.lineWidth = 3.4;
+    // Three imperfect, broken passes read as watercolor pencil and dry brush,
+    // rather than one mathematically perfect vector ellipse.
+    const phase = -((Math.abs(slice[0].x) + Math.abs(slice[0].y)) % 31);
+    ctx.setLineDash([18, 5, 3, 8]);
+    ctx.lineDashOffset = phase;
+    ctx.strokeStyle = `rgba(221, 157, 108, ${0.10 * alpha})`;
+    ctx.lineWidth = 4.0;
     ctx.stroke();
 
-    ctx.strokeStyle = `rgba(247, 209, 156, ${0.52 * alpha})`;
-    ctx.lineWidth = 0.9;
+    ctx.setLineDash([25, 6, 3, 10]);
+    ctx.lineDashOffset = phase - 7;
+    ctx.strokeStyle = `rgba(255, 232, 195, ${0.48 * alpha})`;
+    ctx.lineWidth = 1.05;
+    ctx.stroke();
+
+    ctx.setLineDash([10, 9, 2, 13]);
+    ctx.lineDashOffset = phase + 11;
+    ctx.strokeStyle = `rgba(239, 171, 119, ${0.32 * alpha})`;
+    ctx.lineWidth = 0.62;
     ctx.stroke();
     ctx.restore();
   }
@@ -376,41 +391,47 @@
     const y = state.height * v.sunY;
     const responsive = Math.max(0.72, Math.min(1.25, Math.min(state.width, state.height) / 820));
     const radius = 66 * responsive * v.bodies * 1.35;
-    const pulse = state.paused ? 1 : 1 + Math.sin(elapsed / 2100) * 0.018;
+    const pulse = state.paused ? 1 : 1 + Math.sin(elapsed / 2600) * 0.008;
 
-    // The Sun is a light source, not an object: no sphere shader, no surface
-    // texture, no hard circumference. Three nested falloffs, drawn after the
-    // orbits so the bloom washes over the rings passing near it — that bleed is
-    // the main cue for which body emits and which merely reflect.
+    // The generated texture supplies the painted energy. The procedural part
+    // is deliberately restrained: a warm wash around the disc and a few loose
+    // contour marks, rather than a white digital core that erases the artwork.
     const r = radius * pulse;
     ctx.save();
     ctx.globalCompositeOperation = "screen";
 
-    const spread = ctx.createRadialGradient(x, y, r * .8, x, y, r * 3.0);
-    spread.addColorStop(0, "rgba(255, 186, 110, .16)");
-    spread.addColorStop(.45, "rgba(243, 158, 84, .07)");
-    spread.addColorStop(1, "rgba(230, 134, 66, 0)");
+    const spread = ctx.createRadialGradient(x, y, r * .72, x, y, r * 2.35);
+    spread.addColorStop(0, "rgba(255, 199, 130, .22)");
+    spread.addColorStop(.42, "rgba(239, 155, 98, .075)");
+    spread.addColorStop(1, "rgba(224, 128, 79, 0)");
     ctx.fillStyle = spread;
-    ctx.fillRect(x - r * 3.0, y - r * 3.0, r * 6.0, r * 6.0);
+    ctx.fillRect(x - r * 2.35, y - r * 2.35, r * 4.7, r * 4.7);
+    ctx.restore();
 
-    const halo = ctx.createRadialGradient(x, y, r * .9, x, y, r * 1.62);
-    halo.addColorStop(0, "rgba(255, 212, 146, .62)");
-    halo.addColorStop(.38, "rgba(252, 184, 112, .30)");
-    halo.addColorStop(1, "rgba(246, 158, 88, 0)");
-    ctx.fillStyle = halo;
-    ctx.fillRect(x - r * 1.62, y - r * 1.62, r * 3.24, r * 3.24);
+    const rotation = state.paused ? state.frozenElapsed / 720000 : elapsed / 720000;
+    drawTexturedSphere(state.images.get("Sun"), x, y, r, rotation, true);
 
-    // Core holds near-full opacity most of the way out, then dissolves over the
-    // last sliver. That reads as a disc without ever presenting a hard rim.
-    const core = ctx.createRadialGradient(x, y, 0, x, y, r * 1.04);
-    core.addColorStop(0, "rgba(255, 246, 220, .99)");
-    core.addColorStop(.46, "rgba(255, 224, 158, .97)");
-    core.addColorStop(.74, "rgba(253, 199, 126, .92)");
-    core.addColorStop(.89, "rgba(250, 176, 104, .66)");
-    core.addColorStop(.96, "rgba(247, 160, 92, .26)");
-    core.addColorStop(1, "rgba(244, 150, 86, 0)");
-    ctx.fillStyle = core;
-    ctx.fillRect(x - r * 1.1, y - r * 1.1, r * 2.2, r * 2.2);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalCompositeOperation = "screen";
+    ctx.lineCap = "round";
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.beginPath();
+      const steps = 72;
+      for (let i = 0; i <= steps; i++) {
+        const angle = (i / steps) * Math.PI * 2;
+        const broken = ((i + pass * 13) % 27) > 21;
+        const wobble = Math.sin(angle * 5 + pass * 1.7) * r * .014 + Math.sin(angle * 13) * r * .006;
+        const rr = r * (pass ? .91 : .98) + wobble;
+        const px = Math.cos(angle) * rr;
+        const py = Math.sin(angle) * rr;
+        if (i === 0 || broken) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = pass ? "rgba(255, 245, 214, .26)" : "rgba(255, 216, 159, .34)";
+      ctx.lineWidth = pass ? .8 : 1.25;
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -434,7 +455,10 @@
     for (let column = 0; column < diameter; column++) {
       const nx = (column + .5 - radius) / radius;
       if (Math.abs(nx) > 1) continue;
-      const longitude = Math.asin(nx) / Math.PI;
+      // A visible hemisphere spans 180°—half of a 2:1 equirectangular map.
+      // The previous full-width sampling compressed an entire world onto the
+      // front disc; this keeps the wrapping consistent with the 3D prototype.
+      const longitude = Math.asin(nx) / (Math.PI * 2);
       let u = rotation + longitude + .5;
       u = u - Math.floor(u);
       const sourceX = Math.floor(u * image.width) % image.width;
@@ -442,48 +466,48 @@
     }
 
     if (!isSun) {
-      // Terminator: highlight sits on the sun-facing limb, shadow opposite it.
+      // Almost-flat illumination keeps every body in the same watercolor plane
+      // as the background. Direction is still readable, but there is no hard
+      // terminator or glossy 3D crescent.
       const shade = ctx.createRadialGradient(
-        x + light.x * radius * .52, y + light.y * radius * .52, radius * .06,
-        x - light.x * radius * .34, y - light.y * radius * .34, radius * 1.22
+        x + light.x * radius * .38, y + light.y * radius * .38, radius * .08,
+        x - light.x * radius * .20, y - light.y * radius * .20, radius * 1.28
       );
-      shade.addColorStop(0, "rgba(255, 250, 224, .26)");
-      shade.addColorStop(.46, "rgba(29, 40, 59, .04)");
-      shade.addColorStop(1, "rgba(10, 17, 32, .66)");
+      shade.addColorStop(0, "rgba(255, 247, 220, .075)");
+      shade.addColorStop(.54, "rgba(30, 43, 61, .015)");
+      shade.addColorStop(1, "rgba(13, 23, 39, .16)");
       ctx.fillStyle = shade;
       ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
 
-      // Warm crescent where the surface catches the Sun directly.
       ctx.globalCompositeOperation = "screen";
       const rim = ctx.createRadialGradient(
         x + light.x * radius, y + light.y * radius, radius * .04,
         x + light.x * radius, y + light.y * radius, radius * 1.05
       );
-      rim.addColorStop(0, "rgba(255, 230, 180, .50)");
-      rim.addColorStop(.45, "rgba(255, 212, 150, .12)");
+      rim.addColorStop(0, "rgba(255, 230, 180, .11)");
+      rim.addColorStop(.45, "rgba(255, 212, 150, .035)");
       rim.addColorStop(1, "rgba(255, 200, 130, 0)");
       ctx.fillStyle = rim;
       ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
     } else {
       ctx.globalCompositeOperation = "screen";
       const core = ctx.createRadialGradient(x - radius * .25, y - radius * .3, 0, x, y, radius);
-      core.addColorStop(0, "rgba(255,255,225,.32)");
-      core.addColorStop(1, "rgba(255,203,120,.04)");
+      core.addColorStop(0, "rgba(255,255,225,.10)");
+      core.addColorStop(1, "rgba(255,203,120,.015)");
       ctx.fillStyle = core;
       ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
     }
     ctx.restore();
 
     if (!isSun) {
-      // Faint halo, brightest on the lit side — sells the body as sitting in
-      // the scene rather than pasted on top of it.
+      // A trace of color bleed unifies the painted edge with the paper sky.
       ctx.save();
       ctx.globalCompositeOperation = "screen";
       const halo = ctx.createRadialGradient(
         x + light.x * radius * .3, y + light.y * radius * .3, radius * .92,
         x, y, radius * 1.5
       );
-      halo.addColorStop(0, "rgba(255, 222, 172, .20)");
+      halo.addColorStop(0, "rgba(255, 222, 172, .055)");
       halo.addColorStop(1, "rgba(255, 210, 150, 0)");
       ctx.fillStyle = halo;
       ctx.beginPath();
@@ -493,8 +517,8 @@
     }
 
     ctx.save();
-    ctx.strokeStyle = isSun ? "rgba(255, 228, 168, .55)" : "rgba(248, 226, 194, .28)";
-    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = isSun ? "rgba(255, 228, 168, .42)" : "rgba(248, 226, 194, .16)";
+    ctx.lineWidth = isSun ? 1.0 : .7;
     ctx.beginPath();
     ctx.arc(x, y, radius - .55, 0, Math.PI * 2);
     ctx.stroke();
@@ -509,14 +533,18 @@
     ctx.translate(x, y);
     ctx.rotate((-8 + (view().roll || 0)) * DEG);
     ctx.scale(1, flatten);
-    ctx.strokeStyle = front ? "rgba(240, 216, 178, .78)" : "rgba(201, 166, 126, .50)";
-    ctx.lineWidth = (front ? 5.5 : 8) / flatten;
+    ctx.lineCap = "round";
+    ctx.setLineDash(front ? [radius * .68, radius * .10, radius * .12, radius * .16] : [radius * .82, radius * .08, radius * .18, radius * .13]);
+    ctx.strokeStyle = front ? "rgba(240, 216, 178, .64)" : "rgba(201, 166, 126, .38)";
+    ctx.lineWidth = (front ? 4.8 : 7) / flatten;
     ctx.beginPath();
     if (front) ctx.arc(0, 0, radius * 1.72, 0, Math.PI);
     else ctx.ellipse(0, 0, radius * 1.72, radius * 1.72, 0, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = "rgba(252, 238, 207, .55)";
-    ctx.lineWidth = 1.4 / flatten;
+    ctx.setLineDash([radius * .92, radius * .12, radius * .20, radius * .18]);
+    ctx.lineDashOffset = -radius * .23;
+    ctx.strokeStyle = "rgba(252, 238, 207, .48)";
+    ctx.lineWidth = 1.15 / flatten;
     ctx.beginPath();
     if (front) ctx.arc(0, 0, radius * 1.95, 0, Math.PI);
     else ctx.ellipse(0, 0, radius * 1.95, radius * 1.95, 0, 0, Math.PI * 2);
@@ -552,6 +580,81 @@
   function elapsedTime(now) {
     if (state.paused) return state.frozenElapsed;
     return state.frozenElapsed + (now - state.startTime);
+  }
+
+  function rolledOffset(x, y) {
+    const r = state.roll;
+    if (!r) return { x, y };
+    return { x: x * r.cos - y * r.sin, y: x * r.sin + y * r.cos };
+  }
+
+  // The Moon uses its real geocentric direction, but its visual separation is
+  // enlarged so the companion remains legible at wallpaper scale. Its orbit is
+  // split into depth-bearing painted arcs, just like the planetary paths: the
+  // far half paints before Earth and the near half paints after it.
+  function collectMoonSystem(earthPoint, earthRadius, elapsed, out) {
+    if (!state.moonVector) return;
+    const basis = state.basis;
+    const distance = Math.max(earthRadius * 3.0, 24);
+    const length = Math.hypot(state.moonVector.x, state.moonVector.y, state.moonVector.z) || 1;
+    const moonDirection = {
+      x: state.moonVector.x / length,
+      y: state.moonVector.y / length,
+      z: state.moonVector.z / length
+    };
+
+    if (state.orbits) {
+      const points = [];
+      const tilt = 5.15 * DEG;
+      for (let i = 0; i <= 96; i++) {
+        const angle = (i / 96) * Math.PI * 2;
+        const local = {
+          x: Math.cos(angle),
+          y: Math.sin(angle) * Math.cos(tilt),
+          z: Math.sin(angle) * Math.sin(tilt)
+        };
+        const offset = rolledOffset(dot(local, basis.right) * distance, -dot(local, basis.up) * distance);
+        points.push({
+          x: earthPoint.x + offset.x,
+          y: earthPoint.y + offset.y,
+          depth: earthPoint.depth - dot(local, basis.toward) * .035
+        });
+      }
+
+      let nearest = Infinity;
+      let farthest = -Infinity;
+      for (const point of points) {
+        nearest = Math.min(nearest, point.depth);
+        farthest = Math.max(farthest, point.depth);
+      }
+      const span = farthest - nearest || 1;
+      for (let i = 0; i < points.length - 1; i += 4) {
+        const slice = points.slice(i, Math.min(i + 5, points.length));
+        const depth = slice.reduce((sum, point) => sum + point.depth, 0) / slice.length;
+        const away = (depth - nearest) / span;
+        out.push({ depth, draw: () => strokeArc(slice, .78 * (1 - away * .55)) });
+      }
+    }
+
+    const moonOffset = rolledOffset(
+      dot(moonDirection, basis.right) * distance,
+      -dot(moonDirection, basis.up) * distance
+    );
+    const moonPoint = {
+      x: earthPoint.x + moonOffset.x,
+      y: earthPoint.y + moonOffset.y,
+      depth: earthPoint.depth - dot(moonDirection, basis.toward) * .035
+    };
+    const moonRadius = Math.max(3.4, earthRadius * .28);
+    out.push({
+      depth: moonPoint.depth,
+      draw: () => {
+        const rotation = elapsed / 145000;
+        const light = lightDirection(moonPoint.x, moonPoint.y);
+        drawTexturedSphere(state.images.get("Moon"), moonPoint.x, moonPoint.y, moonRadius, rotation, false, light);
+        if (state.labels) drawLabel("Moon", moonPoint.x, moonPoint.y, moonRadius);
+      }
+    });
   }
 
   function render(now) {
@@ -595,6 +698,7 @@
           if (state.labels) drawLabel(planet.name, point.x, point.y, radius);
         }
       });
+      if (planet.name === "Earth") collectMoonSystem(point, radius, elapsed, drawables);
     }
 
     // Farthest first, so nearer things paint over them.

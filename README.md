@@ -41,11 +41,13 @@ When you land on something you like, press `C`. It copies the current camera as 
 ## What is live
 
 - Planet centers are recalculated from the current date and time using Astronomy Engine's heliocentric ephemerides.
+- The Moon uses its current geocentric direction and a deliberately enlarged illustrated orbit so it remains readable beside Earth.
 - Orbit rings are traced by sampling each planet's real ephemeris across one full period, not by drawing a fitted ellipse.
 - Coordinates are rotated into the J2000 ecliptic frame, then projected one of two ways. Presets without a `distance` use **orthographic** projection: a viewing direction plus a tilt, no viewer position, so every orbit ring stays symmetric about the Sun. Presets with a `distance` use a **perspective** camera standing that far out, which makes the near half of each ring spread wide and the far half bunch toward a horizon. The bearing is fixed either way, so the composition never drifts.
 - Orbital distances are deliberately compressed so Earth remains readable on a laptop screen. Planet sizes are illustrative, not to scale.
-- Each orbit is emitted as ~30 short arcs, each carrying its own depth. Arcs, debris, planets and the Sun are sorted together and drawn back to front, so a near arc can cross in front of an outer planet while a far arc passes behind an inner one. The far half of every ring is faded to ~38% of the near half. Those two things together are what make the rings read as a plane rather than as flat nested ovals.
-- The Sun has its own render path — nested radial falloffs, no sphere shader, no surface texture, no hard edge. It is drawn after the orbits so its bloom washes over any ring passing near it.
+- Each orbit is emitted as ~30 short painted arcs, each carrying its own depth. Arcs, debris, planets, the Moon and the Sun are sorted together and drawn back to front, so rear strokes disappear behind a body while forward strokes remain visible over it. The far half of every ring is also faded. Those two things together make the rings read as a plane rather than flat nested ovals.
+- The Sun uses its own seamless watercolor surface map, a restrained bloom and loose painted contour marks. Its depth participates in the same sort as the orbit arcs, so paths crossing near it retain correct front/back visibility.
+- Planet lighting is intentionally shallow and low-contrast. Texture, paper grain and painted clouds carry the form, keeping the bodies visually integrated with the illustrated background rather than reading as glossy 3D objects.
 - Orbital motion stays tied to real time. Only axial texture rotation, Sun shimmer, and star twinkling are artistically accelerated.
 
 No internet connection, account, build step, backend, or hosting is required.
