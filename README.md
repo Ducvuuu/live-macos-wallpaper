@@ -65,6 +65,8 @@ All modes add separate, very slow oscillations to elevation, azimuth, roll, zoom
 
 Press **Earth focus** in the bottom bar or `E` to replace the full Solar System with a close, centered Earth and its Moon. This scene omits the Sun, every other planet, the asteroid belt, and every planetary orbit. One watercolor guide remains: the Moon's real sampled geocentric orbit, enlarged with the Moon for readability. `O` toggles it. Toggling Earth Focus off restores the previous full-system camera without changing the preset.
 
+Earth Focus has its own default camera: elevation `50.4°`, azimuth `45.0°`, roll `339.9°`, zoom `0.96×`, distance `2.30`, body scale `0.86×`, and Sun anchor `0.60, 0.50`. Entering it starts from this composition; leaving it restores the separate Solar System camera.
+
 Earth Focus works with every Zen mode. **Astronomical Zen** advances the real Earth–Moon ephemeris, while **Ambient Zen** keeps the real current Earth orientation and Moon direction under the breathing camera. **Dream Zen** provides a deliberately cinematic Moon orbit and axial motion.
 
 The Earth-only **Light** menu defaults to **Accurate**. It paints the dated day/night terminator on Earth, the Moon's phase, and real umbra/penumbra shadows whenever the date actually produces a solar or lunar eclipse. The Moon-orbit guide fades on its far side to make depth easier to read. **Eclipse demo** temporarily places the Moon into a slowly sweeping solar-eclipse alignment so the same cone geometry can be inspected without hunting for an eclipse date; its real orbit guide is hidden while the demonstration is active. **Off** restores an unshaded study view. None of this lighting UI or shadow work runs outside Earth Focus, and the canvas adds no lighting or eclipse annotations.

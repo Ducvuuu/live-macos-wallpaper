@@ -71,6 +71,17 @@
     { name: "Close",    elevation: 16, azimuth: 300, sunX: 0.78, sunY: 0.54, zoom: 2.35, bodies: 1.15 },
     { name: "Tabletop", elevation: 62, azimuth: 300, sunX: 0.50, sunY: 0.50, zoom: 1.00, bodies: 0.55 }
   ];
+  const EARTH_FOCUS_VIEW = {
+    name: "Earth Focus",
+    elevation: 50.4,
+    azimuth: 45.0,
+    roll: 339.9,
+    sunX: 0.60,
+    sunY: 0.50,
+    zoom: 0.96,
+    bodies: 0.86,
+    distance: 2.30
+  };
   const textureRoot = "assets/textures/";
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -103,6 +114,7 @@
     cameraAxis: { x: 1, y: 0 },
     basis: null,
     viewIndex: 0,
+    earthFocusView: Object.assign({}, EARTH_FOCUS_VIEW),
     labels: false,
     orbits: true,
     paused: reducedMotion,
@@ -254,7 +266,7 @@
   // The live camera is a mutable copy of a preset, so dragging never damages
   // the presets themselves — cycling with V always restores clean values.
   function view() {
-    return state.zenView || state.live;
+    return state.zenView || (state.earthFocus ? state.earthFocusView : state.live);
   }
 
   function applyView(index = state.viewIndex) {
@@ -301,8 +313,8 @@
     if (!ZEN_MODES.includes(mode)) mode = "astronomical";
     const now = performance.now();
 
-    // Every Zen mode begins from the live Solar System. This also makes
-    // switching among modes predictable while testing them.
+    // Every Zen mode begins from the active camera, including the dedicated
+    // Earth Focus framing. Switching modes therefore preserves the scene.
     state.zenMode = null;
     state.zenView = null;
     returnToToday();
@@ -311,8 +323,9 @@
     state.zenMode = mode;
     state.zenSelection = mode;
     state.zenStart = now;
-    state.zenBaseView = Object.assign({}, state.live);
-    state.zenView = Object.assign({}, state.live);
+    const activeView = state.earthFocus ? state.earthFocusView : state.live;
+    state.zenBaseView = Object.assign({}, activeView);
+    state.zenView = Object.assign({}, activeView);
     state.zenSpinStart.clear();
     for (const planet of planets) state.zenSpinStart.set(planet.name, state.axes.get(planet.name).spin);
     state.zenSpinStart.set("Moon", state.moonAxis.spin);
@@ -371,10 +384,17 @@
 
   function setEarthFocus(enabled = !state.earthFocus) {
     state.earthFocus = Boolean(enabled);
+    if (state.earthFocus) state.earthFocusView = Object.assign({}, EARTH_FOCUS_VIEW);
+    if (state.zenMode) {
+      const activeView = state.earthFocus ? state.earthFocusView : state.live;
+      state.zenBaseView = Object.assign({}, activeView);
+      state.zenView = Object.assign({}, activeView);
+      state.zenStart = performance.now();
+    }
     earthFocus.setAttribute("aria-pressed", String(state.earthFocus));
     wallpaper.classList.toggle("earth-focus", state.earthFocus);
     state.lastInteraction = performance.now();
-    describeView();
+    refreshCamera();
   }
 
   function setEarthLighting(mode) {
@@ -1395,7 +1415,7 @@
 
   function drawEarthFocus(now) {
     const earth = planets.find(planet => planet.name === "Earth");
-    const baseView = state.zenBaseView || state.live;
+    const baseView = state.zenBaseView || state.earthFocusView;
     const driftX = (view().sunX - baseView.sunX) * state.width * .65;
     const driftY = (view().sunY - baseView.sunY) * state.height * .65;
     const zoomBreath = clamp(view().zoom / baseView.zoom, .96, 1.04);
