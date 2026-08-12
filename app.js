@@ -3,7 +3,10 @@
 
   const wallpaper = document.querySelector("#wallpaper");
   const canvas = document.querySelector("#scene");
-  const ctx = canvas.getContext("2d", { alpha: true });
+  // Not const: the scene cache retargets every drawing helper at an offscreen
+  // buffer by swapping this binding, rather than threading a context argument
+  // through two dozen paint functions.
+  let ctx = canvas.getContext("2d", { alpha: true });
   const loading = document.querySelector("#loading");
   const status = document.querySelector("#status");
   const help = document.querySelector("#help");
@@ -85,6 +88,44 @@
   const textureRoot = "assets/textures/";
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // Host configuration. In a browser tab nothing here applies and the page
+  // behaves exactly as it always has. The macOS wallpaper host sets
+  // window.__WALLPAPER__ before this script runs; ?mode=wallpaper does the
+  // same thing from the address bar, which is how to preview desktop
+  // behaviour without building the app.
+  //
+  // A desktop wallpaper differs from a tab in two ways that matter:
+  //   - it is painted for hours, so frames are a battery cost, not free
+  //   - it receives no pointer or keyboard events at all, so anything that
+  //     keys off "the user has gone idle" would latch on permanently
+  const host = (() => {
+    const injected = window.__WALLPAPER__ || {};
+    const params = new URLSearchParams(location.search);
+    const wallpaper = injected.mode === "wallpaper" || params.get("mode") === "wallpaper";
+    const positive = (key, fallback) => {
+      const value = Number(injected[key] ?? params.get(key));
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    };
+    return {
+      wallpaper,
+      // At real-time speed the scene is very nearly static — planets move
+      // imperceptibly and only the twinkle and Sun shimmer change. Painting
+      // it 30 times a second is almost entirely wasted work, so the desktop
+      // idles slowly and only speeds up when something is actually moving.
+      frameRate: positive("fps", wallpaper ? 10 : 30),
+      activeFrameRate: positive("activeFps", wallpaper ? 20 : 30),
+      zenFrameRate: positive("zenFps", wallpaper ? 20 : 24),
+      // How long a cached scene may be reused before it is repainted to keep
+      // the Sun's shimmer alive. 0 disables the cache entirely, which is the
+      // tab default so browser behaviour is bit-for-bit what it always was.
+      sceneInterval: Number(injected.sceneInterval ?? params.get("sceneInterval") ?? (wallpaper ? 500 : 0)),
+      // Idle Zen is the whole point in a tab and a trap on the desktop: with
+      // no events arriving it would engage after 45s and never release,
+      // running the calendar away from today at six hours a second.
+      autoZen: typeof injected.autoZen === "boolean" ? injected.autoZen : !wallpaper
+    };
+  })();
+
   // Orbital display sizes remain illustrative. Spin-axis direction and
   // rotational phase are supplied separately by Astronomy Engine for the
   // current simulation date.
@@ -123,6 +164,13 @@
     frozenElapsed: 0,
     lastEphemeris: 0,
     lastFrame: 0,
+    renderedFrames: 0,
+    sceneBuffer: null,
+    sceneCtx: null,
+    sceneSignature: null,
+    sceneStamp: 0,
+    sceneRepaints: 0,
+    renderingSuspended: false,
     lastClockUi: 0,
     timeOrigin: Date.now(),
     timeAnchor: Date.now(),
@@ -510,6 +558,17 @@
     canvas.style.width = `${innerWidth}px`;
     canvas.style.height = `${innerHeight}px`;
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+
+    if (host.sceneInterval > 0) {
+      if (!state.sceneBuffer) {
+        state.sceneBuffer = document.createElement("canvas");
+        state.sceneCtx = state.sceneBuffer.getContext("2d");
+      }
+      state.sceneBuffer.width = canvas.width;
+      state.sceneBuffer.height = canvas.height;
+      state.sceneCtx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+      state.sceneSignature = null;      // force a repaint at the new size
+    }
   }
 
   function eclipticVector(body, date) {
@@ -1488,10 +1547,20 @@
 
   function render(now) {
     requestAnimationFrame(render);
-    if (!state.zenMode && !reducedMotion && now - state.lastInteraction >= 45000) {
+
+    // Suspended by the host — the wallpaper is completely covered, the screen
+    // is locked, or the displays are asleep. The loop keeps ticking so it can
+    // resume instantly, but does no work at all.
+    if (state.renderingSuspended) return;
+    if (host.autoZen && !state.zenMode && !reducedMotion && now - state.lastInteraction >= 45000) {
       enterZen(state.zenSelection);
     }
-    const frameRate = state.zenMode ? 24 : 30;
+    // Accelerated time and dragging both produce real motion; real-time
+    // playback does not. Spend frames only where they show.
+    const moving = state.speedIndex > 0 || now - state.lastInteraction < 2000;
+    const frameRate = state.zenMode ? host.zenFrameRate
+                    : moving ? host.activeFrameRate
+                    : host.frameRate;
     if (now - state.lastFrame < 1000 / frameRate) return;
     state.lastFrame = now;
     updateZenCamera(now);
@@ -1503,14 +1572,76 @@
     }
 
     const elapsed = elapsedTime(now);
-    ctx.clearRect(0, 0, state.width, state.height);
-    drawTwinkles(elapsed);
 
     if (state.earthFocus) {
+      state.renderedFrames++;
+      ctx.clearRect(0, 0, state.width, state.height);
+      drawTwinkles(elapsed);
       drawEarthFocus(now);
       return;
     }
 
+    // Scene cache.
+    //
+    // At real-time speed the ephemeris refreshes once a minute and the camera
+    // is still, so roughly 600 consecutive frames paint an identical picture —
+    // 240 stroked orbit arcs, the belt debris, eight textured spheres, the
+    // rings and the Moon, all rebuilt from scratch each time. Measurement
+    // showed the cost is dominated by that draw-call count rather than by
+    // pixel fill, which is exactly the shape of work a cache fixes.
+    //
+    // The scene goes into an offscreen buffer and is reused until something it
+    // depends on changes, or until it goes stale enough that the Sun's shimmer
+    // would visibly freeze. Twinkles stay live on the main canvas underneath,
+    // which is where they were drawn anyway.
+    if (state.sceneCtx) {
+      const signature = sceneSignature();
+      const stale = now - state.sceneStamp >= host.sceneInterval;
+
+      // Nothing has changed and the cache is still fresh. A canvas keeps its
+      // contents between frames, so the correct amount of work here is none —
+      // no clear, no blit, no draw calls at all.
+      if (signature === state.sceneSignature && !stale) return;
+
+      const main = ctx;
+      ctx = state.sceneCtx;
+      ctx.clearRect(0, 0, state.width, state.height);
+      drawTwinkles(elapsed);
+      paintSolarSystem(now, elapsed);
+      ctx = main;
+
+      state.sceneSignature = signature;
+      state.sceneStamp = now;
+      state.sceneRepaints++;
+      state.renderedFrames++;
+
+      ctx.clearRect(0, 0, state.width, state.height);
+      ctx.drawImage(state.sceneBuffer, 0, 0, state.width, state.height);
+      return;
+    }
+
+    state.renderedFrames++;
+    ctx.clearRect(0, 0, state.width, state.height);
+    drawTwinkles(elapsed);
+    paintSolarSystem(now, elapsed);
+  }
+
+  /// Everything the cached scene depends on. Comparing a signature avoids
+  /// having to remember to invalidate at every call site that can move the
+  /// camera, change the date or flip a toggle — a missed one would show up as
+  /// a wallpaper that silently stops updating.
+  function sceneSignature() {
+    const v = view();
+    return [
+      state.lastEphemeris, state.width, state.height, state.dpr,
+      v.elevation, v.azimuth, v.roll || 0, v.sunX, v.sunY,
+      v.zoom, v.bodies, v.distance || 0,
+      state.labels ? 1 : 0, state.orbits ? 1 : 0,
+      state.zenMode || ""
+    ].join(",");
+  }
+
+  function paintSolarSystem(now, elapsed) {
     // Build screen-space body bounds before any orbit is painted. strokeArc
     // uses these bounds as cut-outs, including when an arc is depth-sorted in
     // front of a body.
@@ -1725,7 +1856,123 @@
     if (key === "arrowdown")  { v.elevation = clamp(v.elevation + step, -89, 89); markCustom(); refreshCamera(); event.preventDefault(); }
   });
 
+  // Command surface for the native macOS host.
+  //
+  // The wallpaper window deliberately ignores mouse and keyboard events, so
+  // that desktop icons stay clickable. That leaves the control bar and every
+  // keyboard shortcut unreachable, and this is how they are handed back: the
+  // host drives the same functions the buttons call, and polls stats() for a
+  // readout. It is inert in a browser tab.
+  window.WallpaperBridge = {
+    config: host,
+
+    /// Frames actually painted since the last call, plus what is on screen.
+    /// Counting rendered frames rather than requestAnimationFrame ticks is
+    /// the only honest measure once the loop is rate-capped.
+    stats() {
+      const frames = state.renderedFrames;
+      const repaints = state.sceneRepaints;
+      state.renderedFrames = 0;
+      state.sceneRepaints = 0;
+      return {
+        frames,
+        repaints,
+        suspended: state.renderingSuspended,
+        date: simDate.textContent,
+        zen: state.zenMode,
+        paused: state.paused,
+        earthFocus: state.earthFocus,
+        earthLighting: state.earthLightingMode,
+        speed: SPEEDS[state.speedIndex].label,
+        viewIndex: state.viewIndex,
+        viewName: view().name,
+        labels: state.labels,
+        orbits: state.orbits
+      };
+    },
+
+    views: () => VIEWS.map((entry, index) => ({ index, name: entry.name })),
+    zenModes: () => ZEN_MODES.map(mode => ({ mode, label: ZEN_LABELS[mode] })),
+    speeds: () => SPEEDS.map((entry, index) => ({ index, label: entry.label })),
+
+    setSpeed: index => setSimulationSpeed(index),
+    setDirection: direction => setTimeDirection(direction),
+    togglePause: () => togglePause(),
+    today: () => returnToToday(),
+
+    setView: index => applyView(index),
+    cycleView: () => applyView((state.viewIndex + 1) % VIEWS.length),
+    resetView: () => applyView(),
+    presetLine: () => presetLine(),
+
+    setEarthFocus: on => setEarthFocus(on),
+    setEarthLighting: mode => setEarthLighting(mode),
+    setZen: mode => { mode ? enterZen(mode) : exitZen(); },
+    setLabels: on => { state.labels = !!on; },
+    setOrbits: on => { state.orbits = !!on; },
+
+    /// Stop or restart painting entirely. Used when the desktop is fully
+    /// covered, locked or asleep — nothing is visible, so nothing should be
+    /// drawn. Resuming forces a fresh ephemeris and a full repaint, because
+    /// arbitrary time may have passed while suspended.
+    setRendering(on) {
+      state.renderingSuspended = !on;
+      if (on) {
+        state.sceneSignature = null;
+        state.lastEphemeris = 0;
+      }
+      return !state.renderingSuspended;
+    },
+
+    /// Show or hide the page's own chrome without a reload.
+    setChrome(visible) {
+      document.body.dataset.mode = visible ? "" : "wallpaper";
+    },
+
+    /// Everything needed to reproduce the current composition somewhere else.
+    /// Both camera objects are captured, not just the active one, so moving a
+    /// scene between windows does not silently discard the other framing.
+    snapshot() {
+      const clone = source => (source ? Object.assign({}, source) : null);
+      return {
+        viewIndex: state.viewIndex,
+        live: clone(state.live),
+        earthFocusView: clone(state.earthFocusView),
+        earthFocus: state.earthFocus,
+        earthLighting: state.earthLightingMode,
+        labels: state.labels,
+        orbits: state.orbits,
+        speedIndex: state.speedIndex
+      };
+    },
+
+    /// Inverse of snapshot(). Zen is deliberately not restored — it is a
+    /// presentation state, not part of a composition.
+    apply(snap) {
+      if (!snap) return false;
+
+      // setEarthFocus(true) resets earthFocusView to the built-in default, so
+      // it has to run before the saved cameras are written back.
+      if (typeof snap.earthFocus === "boolean") setEarthFocus(snap.earthFocus);
+
+      // applyView loads VIEWS[index] into state.live, so a snapshot carrying
+      // only an index still produces the right camera rather than leaving the
+      // index and the live camera describing different things.
+      if (typeof snap.viewIndex === "number") applyView(snap.viewIndex);
+      if (snap.live) state.live = Object.assign({}, snap.live);
+      if (snap.earthFocusView) state.earthFocusView = Object.assign({}, snap.earthFocusView);
+      if (typeof snap.labels === "boolean") state.labels = snap.labels;
+      if (typeof snap.orbits === "boolean") state.orbits = snap.orbits;
+      if (typeof snap.speedIndex === "number") setSimulationSpeed(snap.speedIndex);
+      if (typeof snap.earthLighting === "string") setEarthLighting(snap.earthLighting);
+
+      refreshCamera();
+      return true;
+    }
+  };
+
   async function init() {
+    if (host.wallpaper) document.body.dataset.mode = "wallpaper";
     resize();
     try {
       await loadAssets();

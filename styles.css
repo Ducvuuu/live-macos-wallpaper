@@ -382,3 +382,21 @@ kbd { font: inherit; color: #f1c67f; }
   #help { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 104px); }
   #positions { width: 195px; padding: 11px 12px; }
 }
+
+/* Wallpaper mode — the page is painted onto the macOS desktop, where the
+   window ignores pointer and keyboard events. Chrome that cannot be clicked
+   would only be visual noise, so it is hidden. The native host can toggle
+   this back on via WallpaperBridge.setChrome(). */
+body[data-mode="wallpaper"] #time-controls,
+body[data-mode="wallpaper"] #help,
+body[data-mode="wallpaper"] #camera,
+body[data-mode="wallpaper"] #positions,
+body[data-mode="wallpaper"] #status,
+body[data-mode="wallpaper"] #zen-indicator {
+  display: none !important;
+}
+
+body[data-mode="wallpaper"] {
+  cursor: none;
+  overflow: hidden;
+}

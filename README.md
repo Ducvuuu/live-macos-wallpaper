@@ -93,6 +93,65 @@ No internet connection, account, build step, backend, or hosting is required.
 
 This folder is the web version. To place it behind desktop icons, use any macOS utility that can display a local webpage as the desktop and point it at `index.html`. The page is responsive and has no server dependency.
 
+A dedicated native host lives alongside this page in [`macos/`](macos/). It loads this folder in place rather than copying it, so editing `app.js` updates the live desktop within a couple of seconds. The web version below is unaffected by its presence and still runs standalone with no build step.
+
+## Wallpaper mode
+
+Add `?mode=wallpaper` to the URL — or set `window.__WALLPAPER__` before `app.js` runs, which is what the native host does — to switch the page into desktop behaviour. Nothing below applies to an ordinary tab.
+
+| Setting | Tab default | Wallpaper default | Meaning |
+| --- | --- | --- | --- |
+| `fps` | 30 | 10 | Frame rate while time runs in real time |
+| `activeFps` | 30 | 20 | Frame rate when time is accelerated or you are interacting |
+| `zenFps` | 24 | 20 | Frame rate in Zen |
+| `sceneInterval` | 0 (off) | 500 | Milliseconds a cached scene may be reused |
+| `autoZen` | on | **off** | Whether 45 seconds of no input starts Zen |
+
+Two things change on the desktop, both for the same reason: the wallpaper window receives no pointer or keyboard events at all.
+
+- **Idle Zen is off** — the page's own timer, at least. With no events arriving it would fire after 45 seconds and never release, running the calendar away from today at six hours per second. A host can still run Zen as a true idle animation by measuring machine idle time itself and calling `setZen()`, which is what the macOS host does.
+- **The frame rate is much lower and adaptive.** At real-time speed the scene is very nearly static — only the twinkle and Sun shimmer change — so painting it 30 times a second is almost entirely wasted. Accelerated time and interaction raise it again.
+
+The page's own chrome is hidden via `body[data-mode="wallpaper"]` in `styles.css`.
+
+### The scene cache
+
+At real-time speed the ephemeris refreshes once a minute and the camera is still, so several hundred consecutive frames paint an identical picture — around 240 stroked orbit arcs, the belt debris, eight textured spheres, the rings and the Moon, all rebuilt from scratch each time.
+
+With `sceneInterval` above zero the whole scene is painted into an offscreen canvas and reused. A frame where nothing has changed and the cache is still fresh does **no work at all** — no clear, no blit, no draw calls — because a canvas keeps its contents between frames.
+
+Invalidation compares a signature of everything the scene depends on (ephemeris timestamp, every camera field, labels, orbits, Zen mode, size) rather than relying on call sites remembering to mark it dirty. A missed invalidation would present as a wallpaper that silently stops updating, which is exactly the bug you would not notice.
+
+The cache gets out of the way when it should: fast-forwarding at 30 days per second measured ~19 repaints per second, while sitting at real time measured ~2. Earth Focus is never cached — it is a two-body scene and far cheaper already.
+
+`sceneInterval` is the ceiling on staleness, and it exists only so the Sun's shimmer and the star twinkle keep moving. Longer means cheaper and steppier.
+
+## WallpaperBridge
+
+Because the desktop window cannot be clicked or typed into, wallpaper mode exposes `window.WallpaperBridge` so a host application can reach everything the control bar and keyboard shortcuts do. It is present in a tab too, which makes it a convenient console API.
+
+```js
+WallpaperBridge.stats()          // frames painted since last call, date, view, speed, …
+WallpaperBridge.views()          // the VIEWS array, as {index, name}
+WallpaperBridge.setView(2)       // and cycleView(), resetView(), presetLine()
+WallpaperBridge.setSpeed(0)      // setDirection(), togglePause(), today()
+WallpaperBridge.setEarthFocus(true)
+WallpaperBridge.setEarthLighting("accurate")
+WallpaperBridge.setZen("ambient")   // null to leave Zen
+WallpaperBridge.setLabels(true)     // setOrbits(), setChrome()
+
+WallpaperBridge.setRendering(false) // stop painting entirely; true resumes
+
+WallpaperBridge.snapshot()          // the whole composition, as plain data
+WallpaperBridge.apply(snapshot)     // put that composition back
+```
+
+`snapshot()` and `apply()` are how a composition moves between windows. Both camera objects are captured, not just the active one, so switching Earth Focus on and off does not lose the other framing. Zen is deliberately excluded — it is a presentation state, not part of a composition.
+
+`setRendering(false)` is for when nothing can see the page — covered, locked or asleep. The animation loop keeps ticking so it can resume instantly, but does no work. Resuming forces a fresh ephemeris and a full repaint, since arbitrary time may have passed.
+
+`stats()` reports **frames actually painted**, resetting the counter on each call. Counting `requestAnimationFrame` ticks instead would report the display refresh rate and tell you nothing, because the render loop is rate-capped and returns early.
+
 ## Changing the framing
 
 Edit the `VIEWS` array at the top of `app.js`. Each preset is five numbers:

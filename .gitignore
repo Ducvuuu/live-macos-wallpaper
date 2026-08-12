@@ -27,3 +27,8 @@ coverage/
 *.temp
 cache/
 .cache/
+
+# macOS host build artefacts
+macos/.build-stage/
+macos/SolarWallpaper.app/
+macos/run.log
