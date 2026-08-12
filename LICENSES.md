@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Artwork
+
+The planet, moon and Sun surface maps in `assets/textures/`, and the background
+in `assets/milky-way.webp`, are AI-generated. They are illustrative watercolor
+interpretations, not survey data, photography, or any other depiction of real
+surface detail. They are covered by this project's MIT license along with the
+rest of the repository.
+
 ## Astronomy Engine
 
 Astronomy Engine 2.1.19 is Copyright (c) 2019-2025 Don Cross and distributed under the MIT License.
