@@ -138,8 +138,10 @@ final class WallpaperSurface: NSObject, WKNavigationDelegate {
                 self.lastStatsAt = Date()
                 let painted = dictionary["frames"] as? Double ?? 0
                 let repaints = dictionary["repaints"] as? Double ?? 0
+                let ticks = dictionary["ticks"] as? Double ?? 0
                 self.stats["fps"] = interval > 0 ? painted / interval : 0
                 self.stats["repaintsPerSecond"] = interval > 0 ? repaints / interval : 0
+                self.stats["tickFPS"] = interval > 0 ? ticks / interval : 0
             }
             completion?()
         }
@@ -150,6 +152,10 @@ final class WallpaperSurface: NSObject, WKNavigationDelegate {
 
     /// Full scene repaints per second — the expensive path the cache avoids.
     var repaintsPerSecond: Double { stats["repaintsPerSecond"] as? Double ?? 0 }
+
+    /// Raw requestAnimationFrame ticks per second — the ceiling the rate cap
+    /// is working against. A painted rate well under this is the cap's fault.
+    var tickFPS: Double { stats["tickFPS"] as? Double ?? 0 }
 
     // MARK: - Injected bootstrap
 

@@ -174,6 +174,25 @@ final class StudioWindowController: NSWindowController, NSWindowDelegate, WKNavi
         }
     }
 
+    /// Logs the studio's own painted rate, so a normal window can be compared
+    /// against the desktop-level ones under identical conditions.
+    func logFrameRate() {
+        guard isLoaded else { return }
+        let interval = Date().timeIntervalSince(lastStatsAt)
+        lastStatsAt = Date()
+        webView.evaluateJavaScript("JSON.stringify(WallpaperBridge.stats())") { value, _ in
+            guard let json = value as? String, let data = json.data(using: .utf8),
+                  let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            else { return }
+            let frames = dict["frames"] as? Double ?? 0
+            Log.write(String(format: "[studio] %.1f fps painted · zen=%@",
+                             interval > 0 ? frames / interval : 0,
+                             dict["zen"] as? String ?? "off"))
+        }
+    }
+
+    private var lastStatsAt = Date()
+
     private func refreshReadout() {
         guard isLoaded else { return }
         webView.evaluateJavaScript("window.WallpaperBridge ? WallpaperBridge.presetLine() : null") { value, _ in

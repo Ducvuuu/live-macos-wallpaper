@@ -114,7 +114,7 @@
       // idles slowly and only speeds up when something is actually moving.
       frameRate: positive("fps", wallpaper ? 10 : 30),
       activeFrameRate: positive("activeFps", wallpaper ? 20 : 30),
-      zenFrameRate: positive("zenFps", wallpaper ? 20 : 24),
+      zenFrameRate: positive("zenFps", wallpaper ? 45 : 30),
       // How long a cached scene may be reused before it is repainted to keep
       // the Sun's shimmer alive. 0 disables the cache entirely, which is the
       // tab default so browser behaviour is bit-for-bit what it always was.
@@ -122,7 +122,12 @@
       // Idle Zen is the whole point in a tab and a trap on the desktop: with
       // no events arriving it would engage after 45s and never release,
       // running the calendar away from today at six hours a second.
-      autoZen: typeof injected.autoZen === "boolean" ? injected.autoZen : !wallpaper
+      autoZen: typeof injected.autoZen === "boolean" ? injected.autoZen : !wallpaper,
+      // How much a planet may rotate before its texture is rebuilt, as a
+      // multiple of the exact threshold. Rebuilding every sphere every frame
+      // is what limits Zen; a looser tolerance trades imperceptible steps in
+      // planet spin for a visibly smoother camera. 1 is the exact behaviour.
+      textureTolerance: positive("textureTolerance", wallpaper ? 6 : 1)
     };
   })();
 
@@ -165,6 +170,10 @@
     lastEphemeris: 0,
     lastFrame: 0,
     renderedFrames: 0,
+    // Raw requestAnimationFrame cadence, needed to rate-cap without aliasing.
+    lastTick: 0,
+    tickInterval: 0,
+    rafTicks: 0,
     sceneBuffer: null,
     sceneCtx: null,
     sceneSignature: null,
@@ -984,7 +993,12 @@
       state.sphereBuffers.set(image, buffer);
     }
 
-    const pixelRadius = Math.max(2, Math.ceil(radius * state.dpr));
+    // Quantise the buffer size. Zen breathes the zoom by about 1% a frame,
+    // which otherwise changes the pixel radius constantly and invalidates
+    // this cache on every single frame. Rounding up costs a little unused
+    // resolution — the result is scaled to displaySize either way.
+    const step = 8;
+    const pixelRadius = Math.max(2, Math.ceil(radius * state.dpr / step) * step);
     const padding = 2;
     const diameter = pixelRadius * 2;
     const size = diameter + padding * 2;
@@ -997,7 +1011,8 @@
     const phase = rotation - Math.floor(rotation);
     const phaseGap = buffer.phase == null ? Infinity : Math.abs(phase - buffer.phase);
     const wrappedGap = Math.min(phaseGap, 1 - Math.min(phaseGap, 1));
-    const needsRedraw = resized || buffer.longitudeSign !== longitudeSign || wrappedGap > .25 / image.width;
+    const needsRedraw = resized || buffer.longitudeSign !== longitudeSign
+      || wrappedGap > host.textureTolerance * .25 / image.width;
     if (!needsRedraw) {
       return { canvas: buffer.canvas, displaySize: size * radius / pixelRadius };
     }
@@ -1561,7 +1576,23 @@
     const frameRate = state.zenMode ? host.zenFrameRate
                     : moving ? host.activeFrameRate
                     : host.frameRate;
-    if (now - state.lastFrame < 1000 / frameRate) return;
+    // Rate cap, with a tolerance of half a tick.
+    //
+    // A bare `elapsed < 1000 / frameRate` test aliases badly whenever the
+    // requested interval lands near the compositor's own cadence: a tick that
+    // misses the threshold by a fraction of a millisecond is discarded, the
+    // next one arrives a full interval later, and the delivered rate halves.
+    // That is why asking for 30 used to paint fewer frames than asking for 20.
+    // Letting a tick through when it is closer to the target than the next one
+    // would be removes the beat and delivers min(requested, display rate).
+    const tick = now - state.lastTick;
+    state.lastTick = now;
+    state.rafTicks++;
+    if (tick > 0 && tick < 200) {
+      state.tickInterval = state.tickInterval ? state.tickInterval * .9 + tick * .1 : tick;
+    }
+    const tolerance = (state.tickInterval || 16.7) / 2;
+    if (now - state.lastFrame < 1000 / frameRate - tolerance) return;
     state.lastFrame = now;
     updateZenCamera(now);
     const dateMs = simulatedTime(now);
@@ -1597,26 +1628,34 @@
     if (state.sceneCtx) {
       const signature = sceneSignature();
       const stale = now - state.sceneStamp >= host.sceneInterval;
+      const dirty = signature !== state.sceneSignature || stale;
 
-      // Nothing has changed and the cache is still fresh. A canvas keeps its
-      // contents between frames, so the correct amount of work here is none —
-      // no clear, no blit, no draw calls at all.
-      if (signature === state.sceneSignature && !stale) return;
+      if (dirty) {
+        const main = ctx;
+        ctx = state.sceneCtx;
+        ctx.clearRect(0, 0, state.width, state.height);
+        if (!state.zenMode) drawTwinkles(elapsed);
+        paintSolarSystem(now, elapsed);
+        ctx = main;
 
-      const main = ctx;
-      ctx = state.sceneCtx;
-      ctx.clearRect(0, 0, state.width, state.height);
-      drawTwinkles(elapsed);
-      paintSolarSystem(now, elapsed);
-      ctx = main;
+        state.sceneSignature = signature;
+        state.sceneStamp = now;
+        state.sceneRepaints++;
+      }
 
-      state.sceneSignature = signature;
-      state.sceneStamp = now;
-      state.sceneRepaints++;
-      state.renderedFrames++;
+      if (state.zenMode) {
+        state.renderedFrames++;
+        ctx.clearRect(0, 0, state.width, state.height);
+        drawTwinkles(elapsed);
+        ctx.drawImage(state.sceneBuffer, 0, 0, state.width, state.height);
+        return;
+      }
 
-      ctx.clearRect(0, 0, state.width, state.height);
-      ctx.drawImage(state.sceneBuffer, 0, 0, state.width, state.height);
+      if (dirty) {
+        state.renderedFrames++;
+        ctx.clearRect(0, 0, state.width, state.height);
+        ctx.drawImage(state.sceneBuffer, 0, 0, state.width, state.height);
+      }
       return;
     }
 
@@ -1632,12 +1671,31 @@
   /// a wallpaper that silently stops updating.
   function sceneSignature() {
     const v = view();
+    const zen = state.zenMode;
+
+    // Zen quantisation.
+    //
+    // The breathing oscillates over 59-137 second periods, so the scene drifts
+    // by only a pixel or two a second. Rounding the camera to a step just under
+    // one pixel of on-screen motion therefore costs nothing visible, while
+    // collapsing what was a repaint every frame into roughly two a second:
+    // each parameter only crosses a quantum boundary a few dozen times per
+    // oscillation. Coarser steps were tried and judder became visible — an
+    // azimuth quantum of 1 degree moves an outer planet about seven pixels.
+    const q = zen
+      ? (x, step) => (Math.round(x / step) * step).toFixed(4)
+      : (x) => x;
     return [
       state.lastEphemeris, state.width, state.height, state.dpr,
-      v.elevation, v.azimuth, v.roll || 0, v.sunX, v.sunY,
-      v.zoom, v.bodies, v.distance || 0,
+      q(v.elevation, 0.15), q(v.azimuth, 0.15), q(v.roll || 0, 0.1),
+      q(v.sunX, 0.0015), q(v.sunY, 0.0015),
+      q(v.zoom, 0.002), v.bodies, v.distance || 0,
       state.labels ? 1 : 0, state.orbits ? 1 : 0,
-      state.zenMode || ""
+      zen || "",
+      // Dream is the one mode that genuinely moves the planets every frame, so
+      // it cannot be quantised by camera alone. Mercury, the fastest, covers
+      // about ten pixels a second, making a 100ms step a one-pixel advance.
+      zen === "dream" ? Math.floor(performance.now() / 100) : 0
     ].join(",");
   }
 
@@ -1872,11 +1930,14 @@
     stats() {
       const frames = state.renderedFrames;
       const repaints = state.sceneRepaints;
+      const ticks = state.rafTicks;
       state.renderedFrames = 0;
       state.sceneRepaints = 0;
+      state.rafTicks = 0;
       return {
         frames,
         repaints,
+        ticks,
         suspended: state.renderingSuspended,
         date: simDate.textContent,
         zen: state.zenMode,
@@ -1907,7 +1968,14 @@
 
     setEarthFocus: on => setEarthFocus(on),
     setEarthLighting: mode => setEarthLighting(mode),
-    setZen: mode => { mode ? enterZen(mode) : exitZen(); },
+    /// `fps` lets the host pick a rate per trigger: a hand-started animation
+    /// is being watched deliberately and deserves smooth motion, an idle one
+    /// is running to an empty room. The scene cache does reach Zen — the
+    /// camera is quantised in sceneSignature — so the rate is cheap to raise.
+    setZen: (mode, fps) => {
+      if (typeof fps === "number" && fps > 0) host.zenFrameRate = fps;
+      mode ? enterZen(mode) : exitZen();
+    },
     setLabels: on => { state.labels = !!on; },
     setOrbits: on => { state.orbits = !!on; },
 

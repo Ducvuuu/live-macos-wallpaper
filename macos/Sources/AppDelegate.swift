@@ -17,7 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dprCap = 1.0
     private var frameRate = 10
     private var sceneInterval = 500
-    private var zenFrameRate = 15
+    /// A hand-started animation is being watched on purpose, so it gets a
+    /// proper frame rate. An idle one is playing to an empty room.
+    private var zenFrameRate = 30
+    private var idleZenFrameRate = 18
     private var chromeVisible = false
 
     private var watchTimer: DispatchSourceTimer?
@@ -27,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activity: NSObjectProtocol?
     private var builtDynamicMenu = false
     private var studio: StudioWindowController?
+    private var screenFingerprint = ""
 
     // MARK: Idle animation
     //
@@ -44,8 +48,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Energy gating
     private var occlusionTimer: Timer?
-    private var pauseWhenCovered = true
+    /// Off by default: the window-list coverage test produced too many false
+    /// positives in practice, pausing the wallpaper while it was plainly
+    /// visible. Sleep and lock gating are unaffected — those are reliable.
+    /// The menu toggle remains for anyone who wants to try it.
+    private var pauseWhenCovered = false
     private var screenLocked = false
+    /// Disables all automatic suspend (occlusion, lock, display sleep).
+    private var neverSuspend = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         Log.start()
@@ -65,12 +75,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dprCap = Double(env["SOLAR_WALLPAPER_DPR"] ?? "") ?? 1.0
         frameRate = Int(env["SOLAR_WALLPAPER_FPS"] ?? "") ?? 10
         sceneInterval = Int(env["SOLAR_WALLPAPER_SCENE"] ?? "") ?? 500
-        // The scene cache cannot help in Zen — the camera moves every frame — and
-        // two displays measurably saturate above ~15 fps, where output collapses
-        // rather than degrading. Smooth-looking beats nominally-faster.
-        zenFrameRate = Int(env["SOLAR_WALLPAPER_ZEN_FPS"] ?? "") ?? 15
+        // Zen used to collapse above ~20 fps, which looked like a GPU ceiling
+        // but was the page's own rate cap aliasing against a 60 Hz compositor.
+        // With that fixed and the scene cache reaching Zen, measured output is
+        // ~47 fps at 45 requested, so a hand-started animation can have it.
+        zenFrameRate = Int(env["SOLAR_WALLPAPER_ZEN_FPS"] ?? "") ?? 45
+        idleZenFrameRate = Int(env["SOLAR_WALLPAPER_IDLE_ZEN_FPS"] ?? "") ?? 24
+        neverSuspend = env["SOLAR_WALLPAPER_NO_SUSPEND"] == "1"
 
-        Log.write("[config] web=\(webDirectory.path) dpr=\(dprCap) fps=\(frameRate) scene=\(sceneInterval)ms")
+        Log.write("[config] web=\(webDirectory.path) dpr=\(dprCap) fps=\(frameRate) scene=\(sceneInterval)ms suspend=\(neverSuspend ? "off" : "on")")
 
         guard FileManager.default.fileExists(atPath: webDirectory.appendingPathComponent("index.html").path) else {
             presentMissingWebApp()
@@ -78,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         buildStatusItem()
+        screenFingerprint = NSScreen.screens.map { "\($0.localizedName)|\($0.frame)" }.joined(separator: ";")
         rebuildSurfaces()
 
         NotificationCenter.default.addObserver(
@@ -126,6 +140,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspace.addObserver(self, selector: #selector(screensWoke),
                               name: NSWorkspace.screensDidWakeNotification, object: nil)
 
+        // Starts an animation at launch, so its real painted rate shows up in
+        // the ordinary [stats] line without any menu clicking.
+        if let mode = env["SOLAR_WALLPAPER_ZEN"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if env["SOLAR_WALLPAPER_ZEN_ORBITS"] == "0" {
+                    self.surfaces.forEach { $0.command("setOrbits(false)") }
+                }
+                self.surfaces.forEach { $0.command("setZen('\(mode)', \(self.zenFrameRate))") }
+                Log.write("[zen] started \(mode) at \(self.zenFrameRate) fps")
+                // Drive the studio too, so a normal window and the desktop
+                // windows can be compared side by side on the same machine.
+                self.studio?.evaluate("WallpaperBridge.setZen('\(mode)', \(self.zenFrameRate))")
+                Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+                    self.studio?.logFrameRate()
+                }
+            }
+        }
+
         if env["SOLAR_WALLPAPER_STUDIO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.openStudio() }
         }
@@ -151,6 +183,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screensChanged() {
+        let screens = NSScreen.screens
+        let newFingerprint = screens.map { "\($0.localizedName)|\($0.frame)" }.joined(separator: ";")
+        guard newFingerprint != screenFingerprint else {
+            Log.write("[screens] notification fired but nothing changed — ignoring")
+            return
+        }
+        screenFingerprint = newFingerprint
         Log.write("[screens] configuration changed — rebuilding")
         rebuildSurfaces()
     }
@@ -265,8 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if idle >= idleThreshold, !zenFromIdle, currentZenMode == nil {
             zenFromIdle = true
-            Log.write("[idle] \(Int(idle))s idle — starting \(idleZenMode)")
-            surfaces.forEach { $0.command("setZen('\(idleZenMode)')") }
+            Log.write("[idle] \(Int(idle))s idle — starting \(idleZenMode) at \(idleZenFrameRate) fps")
+            surfaces.forEach { $0.command("setZen('\(idleZenMode)', \(idleZenFrameRate))") }
         } else if idle < idleThreshold, zenFromIdle {
             zenFromIdle = false
             Log.write("[idle] activity — leaving idle animation")
@@ -281,11 +320,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screensSlept() {
         screensAsleep = true
-                if zenFromIdle {
+        if zenFromIdle {
             zenFromIdle = false
             surfaces.forEach { $0.command("setZen(null)") }
         }
-        surfaces.forEach { $0.setRendering(false, reason: "displays asleep") }
+        if !neverSuspend {
+            surfaces.forEach { $0.setRendering(false, reason: "displays asleep") }
+        }
     }
 
     @objc private func screensWoke() {
@@ -296,7 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screenLockedChanged(_ note: Notification) {
         screenLocked = note.name.rawValue == "com.apple.screenIsLocked"
-        Log.write("[power] screen \(screenLocked ? "locked — suspending" : "unlocked — resuming")")
+        Log.write("[power] screen \(screenLocked ? "locked" : "unlocked")\(neverSuspend ? " (suspend disabled)" : "")")
+        if neverSuspend { return }
         if screenLocked {
             surfaces.forEach { $0.setRendering(false, reason: "screen locked") }
         } else {
@@ -311,7 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// applications. A full-screen browser or editor is the common case, and
     /// it costs nothing to notice.
     private func checkOcclusion() {
-        guard !screensAsleep, !screenLocked else { return }
+        guard !neverSuspend, !screensAsleep, !screenLocked else { return }
         guard pauseWhenCovered else {
             surfaces.forEach { $0.setRendering(true) }
             return
@@ -378,7 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🪐"
+        if let iconURL = Bundle.main.url(forResource: "MenuBarIconTemplate", withExtension: "pdf"),
+           let icon = NSImage(contentsOf: iconURL) {
+            icon.isTemplate = true
+            icon.size = NSSize(width: 18, height: 18)
+            statusItem.button?.image = icon
+            statusItem.button?.imagePosition = .imageOnly
+            statusItem.button?.setAccessibilityLabel("Solar Wallpaper")
+        }
         statusItem.menu = NSMenu()
         rebuildMenu(views: [], speeds: [], zenModes: [])
     }
@@ -398,6 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               + "\((zen as? [Any] ?? []).count) zen modes")
                     let mode = ProcessInfo.processInfo.environment["SOLAR_WALLPAPER_SELFTEST"]
                     if mode == "1" || mode == "bridge" { self.runSelfTest() }
+                    if mode == "zen" { self.runZenTest() }
                 }
             }
         }
@@ -406,6 +456,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Drives the write half of the bridge and reports what changed. The
     /// wallpaper cannot be clicked, so this is the only way to check that
     /// commands land without going through the menu by hand.
+    /// Measures what a Zen frame-rate request actually delivers. Asking for
+    /// more than the machine can paint makes output collapse, not improve.
+    private func runZenTest() {
+        guard let surface = surfaces.first else { return }
+        let rates = [15, 20, 24, 30, 45, 60]
+        var index = 0
+        func next() {
+            guard index < rates.count else {
+                surface.command("setZen(null)")
+                Log.write("[zentest] done")
+                return
+            }
+            let rate = rates[index]; index += 1
+            surfaces.forEach { $0.command("setZen('ambient', \(rate))") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                surface.refreshStats {
+                    let gpu = ProcessInfo.processInfo.thermalState == .nominal ? "nominal" : "warm"
+                    Log.write(String(format: "[zentest] asked %d fps -> painted %.1f  (raf %.1f, repaints %.1f/s, thermal %@)",
+                                     rate, surface.paintedFPS, surface.tickFPS,
+                                     surface.repaintsPerSecond, gpu))
+                    next()
+                }
+            }
+        }
+        next()
+    }
+
     private func runSelfTest() {
         guard let surface = surfaces.first else { return }
         let steps: [(String, String)] = [
@@ -672,7 +749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A hand-picked animation stays until it is changed by hand.
         zenFromIdle = false
         if let mode = sender.representedObject as? String {
-            broadcast("setZen('\(mode)')")
+            broadcast("setZen('\(mode)', \(zenFrameRate))")
         } else {
             broadcast("setZen(null)")
         }
@@ -790,7 +867,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pickIdleMode(_ sender: NSMenuItem) {
         idleZenMode = sender.representedObject as? String ?? "astronomical"
         saveIdleSettings()
-        if zenFromIdle { surfaces.forEach { $0.command("setZen('\(idleZenMode)')") } }
+        if zenFromIdle { surfaces.forEach { $0.command("setZen('\(idleZenMode)', \(idleZenFrameRate))") } }
         Log.write("[idle] animation now \(idleZenMode)")
         updateMenuState()
     }

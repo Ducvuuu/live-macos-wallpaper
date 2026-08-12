@@ -44,6 +44,8 @@ lipo -create \
 rm -f "$STAGE/Contents/MacOS/SolarWallpaper-arm64" "$STAGE/Contents/MacOS/SolarWallpaper-x86_64"
 
 cp "$ROOT/Resources/Info.plist" "$STAGE/Contents/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
+cp "$ROOT/Resources/MenuBarIconTemplate.pdf" "$STAGE/Contents/Resources/MenuBarIconTemplate.pdf"
 
 echo "==> signing (ad-hoc)"
 codesign --force --sign - "$STAGE" 2>/dev/null
