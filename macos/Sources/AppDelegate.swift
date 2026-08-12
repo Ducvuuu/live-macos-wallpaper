@@ -72,7 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let override = env["SOLAR_WALLPAPER_WEB_DIR"] {
             webDirectory = URL(fileURLWithPath: override)
         }
-        dprCap = Double(env["SOLAR_WALLPAPER_DPR"] ?? "") ?? 1.0
+        // Full device resolution. Measured flat: a still wallpaper repaints
+        // about twice a second and costs the same at 1x or 2x, so capping it
+        // only ever bought softness on a Retina display. The page drops to
+        // zenDprCap while Zen animates, which is where pixels do cost.
+        dprCap = Double(env["SOLAR_WALLPAPER_DPR"] ?? "") ?? 2.0
         frameRate = Int(env["SOLAR_WALLPAPER_FPS"] ?? "") ?? 10
         sceneInterval = Int(env["SOLAR_WALLPAPER_SCENE"] ?? "") ?? 500
         // Zen used to collapse above ~20 fps, which looked like a GPU ceiling

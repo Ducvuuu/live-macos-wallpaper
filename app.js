@@ -115,6 +115,13 @@
       frameRate: positive("fps", wallpaper ? 10 : 30),
       activeFrameRate: positive("activeFps", wallpaper ? 20 : 30),
       zenFrameRate: positive("zenFps", wallpaper ? 45 : 30),
+      // Backing-store cap while Zen is animating. A still wallpaper costs the
+      // same at any resolution — it repaints about twice a second either way —
+      // so the desktop renders at full device resolution and stays sharp. Zen
+      // repaints every frame, where the same pixels halve the frame rate, and
+      // motion is exactly the condition under which the eye stops resolving
+      // them. Sharp when still, smooth when moving.
+      zenDprCap: Number(injected.zenDprCap ?? params.get("zenDprCap") ?? (wallpaper ? 1 : 3)),
       // How long a cached scene may be reused before it is repainted to keep
       // the Sun's shimmer alive. 0 disables the cache entirely, which is the
       // tab default so browser behaviour is bit-for-bit what it always was.
@@ -397,6 +404,9 @@
     zenIndicator.textContent = ZEN_LABELS[mode];
     zenToggle.setAttribute("aria-pressed", "true");
     wallpaper.classList.add("zen-active");
+    // Re-cap the backing store now that zenMode is set. Cheap: it happens once
+    // per transition, not per frame.
+    resize();
     refreshProjection();
   }
 
@@ -410,6 +420,8 @@
     zenToggle.setAttribute("aria-pressed", "false");
     wallpaper.classList.remove("zen-active");
     returnToToday();
+    // Back to full device resolution now that the scene is still again.
+    resize();
     refreshCamera();
     state.lastInteraction = performance.now();
   }
@@ -559,7 +571,7 @@
   }
 
   function resize() {
-    state.dpr = Math.min(devicePixelRatio || 1, 2);
+    state.dpr = Math.min(devicePixelRatio || 1, 2, state.zenMode ? host.zenDprCap : 2);
     state.width = innerWidth;
     state.height = innerHeight;
     canvas.width = Math.round(innerWidth * state.dpr);
