@@ -1,0 +1,58 @@
+name: Release
+
+# Pushing a tag like v0.1 builds the universal app on a real Mac and attaches
+# the dmg to a GitHub release. Nothing here needs a local macOS machine.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swiftc --version
+
+      - name: Build universal app and dmg
+        run: ./macos/build.sh --dmg
+
+      # Proves the thing we actually care about: that the shipped bundle
+      # carries the page. A dmg whose app cannot find index.html launches to
+      # an error dialog and quits, which is not visible from a build log.
+      - name: Verify the web app is bundled
+        run: |
+          app="macos/.build-stage/SolarWallpaper.app"
+          for f in index.html app.js styles.css vendor/astronomy.browser.min.js; do
+            test -f "$app/Contents/Resources/web/$f" || { echo "missing $f"; exit 1; }
+          done
+          test -d "$app/Contents/Resources/web/assets/textures" || exit 1
+          lipo -archs "$app/Contents/MacOS/SolarWallpaper"
+          codesign --verify --deep --strict "$app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SolarWallpaper-dmg
+          path: macos/.build-stage/SolarWallpaper.dmg
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: macos/.build-stage/SolarWallpaper.dmg
+          generate_release_notes: true
+          body: |
+            Requires macOS 13 or later. Universal (Apple Silicon and Intel).
+
+            **First launch is blocked by Gatekeeper.** This build is ad-hoc
+            signed rather than notarized, so macOS refuses it once. Open
+            **System Settings → Privacy & Security**, scroll to the message
+            about SolarWallpaper, and choose **Open Anyway**.
+
+            The wallpaper lives in the menu bar under 🪐.

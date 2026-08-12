@@ -93,7 +93,9 @@ No internet connection, account, build step, backend, or hosting is required.
 
 This folder is the web version. To place it behind desktop icons, use any macOS utility that can display a local webpage as the desktop and point it at `index.html`. The page is responsive and has no server dependency.
 
-A dedicated native host lives alongside this page in [`macos/`](macos/). It loads this folder in place rather than copying it, so editing `app.js` updates the live desktop within a couple of seconds. The web version below is unaffected by its presence and still runs standalone with no build step.
+A dedicated native host lives alongside this page in [`macos/`](macos/). On a development machine it loads this folder in place rather than copying it, so editing `app.js` updates the live desktop within a couple of seconds. The web version below is unaffected by its presence and still runs standalone with no build step.
+
+Prebuilt universal `.dmg` files are on the [releases page](https://github.com/Ducvuuu/live-macos-wallpaper/releases). Those bundles carry their own copy of this page, so they need no checkout. macOS 13 or later. The build is ad-hoc signed rather than notarized, so the first launch is refused and has to be allowed under **System Settings → Privacy & Security → Open Anyway**.
 
 ## Wallpaper mode
 
@@ -168,4 +170,8 @@ Edit the `VIEWS` array at the top of `app.js`. Each preset is five numbers:
 
 Add as many presets as you like — `V` cycles through all of them.
 
-Astronomical calculations use Astronomy Engine 2.1.19, included locally under its MIT license.
+## License
+
+This project is MIT licensed — see [LICENSE](LICENSE).
+
+Astronomical calculations use Astronomy Engine 2.1.19, included locally under its MIT license. Third-party notices are in [LICENSES.md](LICENSES.md).

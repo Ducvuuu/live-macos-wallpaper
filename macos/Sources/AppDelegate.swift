@@ -7,10 +7,36 @@ import ServiceManagement
 /// bundled, so editing app.js there updates the live wallpaper.
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    static let defaultWebDirectory = URL(fileURLWithPath: NSHomeDirectory())
+    /// Where a checkout lives on the developer's machine. Preferred over the
+    /// bundled copy so editing app.js still updates the live desktop.
+    static let developerWebDirectory = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Documents/GitHub/live-macos-wallpaper")
 
-    private var webDirectory = defaultWebDirectory
+    /// The copy build.sh stages inside the bundle, so a downloaded .app is
+    /// self-contained. Absent from a plain `swiftc` build.
+    static var bundledWebDirectory: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("web")
+    }
+
+    private static func containsWebApp(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("index.html").path)
+    }
+
+    /// Explicit override, then a developer checkout, then the bundled copy.
+    ///
+    /// The checkout wins over the bundle on purpose: on the machine this is
+    /// developed on, live reload is the whole point. On anyone else's machine
+    /// that path does not exist and the bundle answers.
+    static func resolveWebDirectory(_ override: String?) -> URL {
+        if let override { return URL(fileURLWithPath: override) }
+        if containsWebApp(developerWebDirectory) { return developerWebDirectory }
+        if let bundled = bundledWebDirectory, containsWebApp(bundled) { return bundled }
+        return developerWebDirectory
+    }
+
+    private var webDirectory = developerWebDirectory
     private var surfaces: [WallpaperSurface] = []
     private var statusItem: NSStatusItem!
 
@@ -69,9 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reason: "Rendering the live desktop wallpaper")
 
         let env = ProcessInfo.processInfo.environment
-        if let override = env["SOLAR_WALLPAPER_WEB_DIR"] {
-            webDirectory = URL(fileURLWithPath: override)
-        }
+        webDirectory = Self.resolveWebDirectory(env["SOLAR_WALLPAPER_WEB_DIR"])
         // Full device resolution. Measured flat: a still wallpaper repaints
         // about twice a second and costs the same at 1x or 2x, so capping it
         // only ever bought softness on a Retina display. The page drops to
@@ -892,7 +916,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Expected index.html in:
             \(webDirectory.path)
 
-            Set SOLAR_WALLPAPER_WEB_DIR to point somewhere else.
+            A release build carries its own copy inside the app bundle, so
+            seeing this means the bundle is incomplete. Set
+            SOLAR_WALLPAPER_WEB_DIR to point at a checkout instead.
             """
         alert.alertStyle = .critical
         alert.runModal()

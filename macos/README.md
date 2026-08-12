@@ -29,6 +29,39 @@ No Xcode project and no Xcode.app required — `swiftc` compiles the sources and
 the script assembles the `.app` bundle and ad-hoc signs it. Command Line Tools
 are enough.
 
+## Releasing
+
+`./macos/build.sh --dmg` builds without installing and packages
+`macos/.build-stage/SolarWallpaper.dmg`, with the customary drag-to-Applications
+symlink inside.
+
+Pushing a `v*` tag runs the same script on a GitHub `macos-latest` runner and
+attaches the dmg to a release, so cutting a release needs no local Mac. See
+[`.github/workflows/release.yml`](../.github/workflows/release.yml).
+
+A release build is **self-contained**: `build.sh` stages `index.html`, `app.js`,
+`styles.css`, `assets/` and `vendor/` into `Contents/Resources/web`. Nothing
+about live reload changes on a development machine, because
+`resolveWebDirectory` prefers a real checkout and only falls back to the bundled
+copy when there isn't one:
+
+1. `SOLAR_WALLPAPER_WEB_DIR`, if set
+2. `~/Documents/GitHub/live-macos-wallpaper`, if it contains `index.html`
+3. `Contents/Resources/web` inside the bundle
+
+The workflow asserts step 3 actually exists in the built bundle. A missing
+payload does not fail a compile — it fails at launch, on someone else's
+machine, as a dialog no build log would show.
+
+### Gatekeeper
+
+The build is ad-hoc signed (`codesign --sign -`), not Developer ID signed and
+not notarized. A dmg downloaded from GitHub carries the quarantine attribute,
+so the first launch is refused and the user has to allow it under **System
+Settings → Privacy & Security → Open Anyway**. Removing that step means a paid
+Apple Developer account, `--sign "Developer ID Application: …"` and
+`notarytool submit --wait` in the workflow.
+
 ### Environment overrides
 
 | Variable | Default | Effect |
