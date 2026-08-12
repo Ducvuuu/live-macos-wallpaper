@@ -409,8 +409,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fps = first.paintedFPS
         let date = stats["date"] as? String ?? "—"
         let zen = stats["zen"] as? String
-        Log.write(String(format: "[stats] %.1f fps · %.1f repaints/s · idle %.0fs · zen=%@%@ · %@",
-                         fps, first.repaintsPerSecond, systemIdleSeconds(),
+        // raf is the raw requestAnimationFrame rate. It separates a rate the
+        // page chose from a rate the system imposed: work starving the loop
+        // shows up as raf collapsing under load while running free when idle,
+        // whereas a WebKit or App Nap throttle caps raf even with nothing to do.
+        Log.write(String(format: "[stats] %.1f fps · %.1f raf · %.1f repaints/s · idle %.0fs · zen=%@%@ · %@",
+                         fps, first.tickFPS, first.repaintsPerSecond, systemIdleSeconds(),
                          zen ?? "off", zenFromIdle ? " (auto)" : "", date)
                   + (first.isSuspended ? "  [PAUSED]" : ""))
         updateMenuState()

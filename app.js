@@ -1019,6 +1019,28 @@
     buffer.phase = phase;
     buffer.longitudeSign = longitudeSign;
 
+    // Pre-scale the source to the sphere's exact pixel height, once per size.
+    //
+    // The strip loop below runs once per output column, and every strip used to
+    // carry the full 512-row source down to `diameter` rows — the same vertical
+    // resample, repeated once per column, for every sphere, on every repaint.
+    // That redundancy is what made a repaint cost hundreds of milliseconds once
+    // the canvas lost GPU acceleration. Resampling here instead leaves each
+    // strip a 1:1 vertical blit. The filtering is the same and so is the
+    // result; it just happens once per size rather than once per column.
+    if (!buffer.source || buffer.sourceHeight !== diameter) {
+      const source = buffer.source || document.createElement("canvas");
+      source.width = image.width;          // full longitude resolution retained
+      source.height = diameter;            // assigning size also clears it
+      const sctx = source.getContext("2d", { alpha: true });
+      sctx.imageSmoothingEnabled = true;
+      sctx.imageSmoothingQuality = "high";
+      sctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, image.width, diameter);
+      buffer.source = source;
+      buffer.sourceHeight = diameter;
+    }
+    const source = buffer.source;
+
     const bctx = buffer.context;
     bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.clearRect(0, 0, size, size);
@@ -1038,7 +1060,7 @@
       let u = phase + longitude + .5;
       u -= Math.floor(u);
       const sourceX = Math.floor(u * image.width) % image.width;
-      bctx.drawImage(image, sourceX, 0, 1, image.height, padding + column - .25, padding, 1.5, diameter);
+      bctx.drawImage(source, sourceX, 0, 1, diameter, padding + column - .25, padding, 1.5, diameter);
     }
     bctx.restore();
 
