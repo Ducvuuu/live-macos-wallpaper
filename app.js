@@ -152,6 +152,31 @@
     { name: "Neptune", radius: 25, period: 60182, color: "#718cae" }
   ];
 
+  function asteroidNoise(index, salt) {
+    const value = Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  }
+
+  // Stable world-space particles. The generated atlas supplies the art; this
+  // data only decides where each painted stone lives and how large it reads.
+  const asteroidField = Array.from({ length: 440 }, (_, index) => {
+    const sizeRoll = asteroidNoise(index, 5);
+    let size = 2.5 + asteroidNoise(index, 6) * 2.1;
+    if (sizeRoll > 0.82) size = 4.8 + asteroidNoise(index, 7) * 2.7;
+    if (sizeRoll > 0.975) size = 8.0 + asteroidNoise(index, 8) * 3.0;
+    const radius = 2.08 + asteroidNoise(index, 1) * 1.18;
+    return {
+      radius,
+      angle: index * 2.399963 + (asteroidNoise(index, 2) - 0.5) * 0.42,
+      inclination: (asteroidNoise(index, 3) - 0.5) * 0.11,
+      node: asteroidNoise(index, 4) * Math.PI * 2,
+      period: 365.256 * Math.pow(radius, 1.5),
+      sprite: Math.floor(asteroidNoise(index, 9) * 16),
+      size,
+      turn: asteroidNoise(index, 10) * Math.PI * 2
+    };
+  });
+
   const state = {
     width: 0,
     height: 0,
@@ -567,6 +592,16 @@
         missing.push(job.file);
       }
     }));
+    try {
+      state.images.set("AsteroidSprites", await loadImage("assets/asteroid-sprites.png"));
+    } catch {
+      missing.push("asteroid-sprites.png");
+    }
+    try {
+      state.images.set("BeltStation", await loadImage("assets/belt-station.png"));
+    } catch {
+      missing.push("belt-station.png");
+    }
     if (missing.length) console.warn(`Using painted stand-ins for: ${missing.join(", ")}`);
   }
 
@@ -914,27 +949,92 @@
   }
 
   function collectAsteroidBelt(out) {
-    for (let i = 0; i < 46; i++) {
-      const angle = i * 2.399963 + Math.sin(i * 8.17) * 0.05;
-      const radius = 2.72 + Math.sin(i * 3.1) * 0.16;
-      const p = project({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, z: Math.sin(i * 1.7) * 0.025 });
+    const image = state.images.get("AsteroidSprites");
+    if (!image) return;
+    const cellWidth = image.width / 4;
+    const cellHeight = image.height / 4;
+    const dateDays = (state.ephemerisDate || new Date()).getTime() / DAY;
+    const projected = asteroidField.map(asteroid => {
+      const angle = asteroid.angle + dateDays / asteroid.period * Math.PI * 2;
+      const vector = {
+        x: Math.cos(angle) * asteroid.radius,
+        y: Math.sin(angle) * asteroid.radius,
+        z: Math.sin(angle + asteroid.node) * asteroid.radius * asteroid.inclination
+      };
+      return { asteroid, angle, point: project(vector) };
+    });
+
+    let nearest = Infinity;
+    let farthest = -Infinity;
+    for (const { point } of projected) {
+      nearest = Math.min(nearest, point.depth);
+      farthest = Math.max(farthest, point.depth);
+    }
+    const span = farthest - nearest || 1;
+    const responsive = Math.max(0.78, Math.min(1.25, Math.min(state.width, state.height) / 820));
+    const sunX = state.width * view().sunX;
+    const sunY = state.height * view().sunY;
+
+    for (const { asteroid, point } of projected) {
+      const column = asteroid.sprite % 4;
+      const row = Math.floor(asteroid.sprite / 4);
+      const diameter = asteroid.size * responsive * Math.max(0.62, Math.min(1.7, point.size));
+      const away = (point.depth - nearest) / span;
+      const alpha = 0.96 - away * 0.38;
+      const lightAngle = Math.atan2(sunY - point.y, sunX - point.x);
+      const rotation = lightAngle + Math.PI * 0.75 + asteroid.turn * 0.18;
+
       out.push({
-        depth: p.depth,
+        depth: point.depth,
         draw: () => {
           ctx.save();
-          ctx.translate(p.x, p.y);
-          ctx.rotate(angle);
-          ctx.fillStyle = `rgba(230, 183, 126, ${0.30 * Math.min(p.size, 1.6)})`;
-          if (i % 5 === 0) ctx.fillRect(-2.1, -0.7, 4.2, 1.4);
-          else {
-            ctx.beginPath();
-            ctx.arc(0, 0, i % 3 ? 0.8 : 1.25, 0, Math.PI * 2);
-            ctx.fill();
-          }
+          ctx.globalAlpha = alpha;
+          ctx.translate(point.x, point.y);
+          ctx.rotate(rotation);
+          ctx.drawImage(
+            image,
+            column * cellWidth,
+            row * cellHeight,
+            cellWidth,
+            cellHeight,
+            -diameter * 0.5,
+            -diameter * 0.5,
+            diameter,
+            diameter
+          );
           ctx.restore();
         }
       });
     }
+  }
+
+  function collectBeltStation(out) {
+    const image = state.images.get("BeltStation");
+    if (!image) return;
+
+    // A fixed landmark in the painted map rather than another orbiting body.
+    // Its heliocentric radius keeps it firmly between Mars and Jupiter, while
+    // the shared depth list lets planets and nearby belt debris cross it.
+    const radius = 2.72;
+    const angle = 3.82;
+    const point = project({
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      z: 0.055
+    });
+    const responsive = Math.max(0.78, Math.min(1.22, Math.min(state.width, state.height) / 820));
+    const width = 14 * responsive * Math.max(0.72, Math.min(1.45, point.size));
+    const height = width * image.height / image.width;
+
+    out.push({
+      depth: point.depth,
+      draw: () => {
+        ctx.save();
+        ctx.globalAlpha = 0.97;
+        ctx.drawImage(image, point.x - width * 0.5, point.y - height * 0.5, width, height);
+        ctx.restore();
+      }
+    });
   }
 
   function drawSun(elapsed) {
@@ -1766,6 +1866,7 @@
       }
       collectAsteroidBelt(drawables);
     }
+    collectBeltStation(drawables);
 
     drawables.push({ depth: project({ x: 0, y: 0, z: 0 }).depth, draw: () => drawSun(elapsed) });
 
